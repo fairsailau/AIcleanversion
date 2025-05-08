@@ -77,7 +77,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
 
         current_doc_type = None
         # Check for document categorization results directly in session_state
-        categorization_results = st.session_state.get('document_categorization_results', {})
+        categorization_results = st.session_state.get('document_categorization', {}).get('results', {}) # Corrected to get nested results
         cat_result = categorization_results.get(file_id)
         if cat_result:
             current_doc_type = cat_result.get('document_type')
