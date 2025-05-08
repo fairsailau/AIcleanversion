@@ -6,7 +6,7 @@ from boxsdk.object.metadata import MetadataUpdate
 from dateutil import parser
 from datetime import timezone
 
-logging.basicConfig(level=logging.INFO, format=	'%(asctime)s - %(name)s - %(levelname)s - %(message)s	)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 if 	'template_schema_cache	' not in st.session_state:
