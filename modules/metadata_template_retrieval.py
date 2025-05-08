@@ -3,6 +3,7 @@ import logging
 import requests
 import time
 from typing import Dict, Any, List, Optional
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -28,21 +29,31 @@ def get_metadata_templates(client, force_refresh=False):
             access_token = client.auth.access_token
         if not access_token:
             raise ValueError('Could not retrieve access token from client')
+
         templates = {}
+        # Assuming 'enterprise' is the primary scope. Add 'global' if needed.
         enterprise_templates = retrieve_templates_by_scope(access_token, 'enterprise')
         for template in enterprise_templates:
             if 'templateKey' in template and 'scope' in template:
                 template_key = template['templateKey']
-                scope = template['scope']
-                template_id = f'{scope}_{template_key}'
-                templates[template_id] = {'id': template_id, 'key': template_key, 'displayName': template.get('displayName', template_key), 'fields': template.get('fields', []), 'hidden': template.get('hidden', False)}
+                scope = template['scope'] # This should be 'enterprise' or 'global'
+                # Construct a unique ID combining scope and templateKey
+                template_id = f"{scope}_{template_key}" 
+                templates[template_id] = {
+                    'id': template_id,
+                    'key': template_key,
+                    'displayName': template.get('displayName', template_key),
+                    'fields': template.get('fields', []),
+                    'hidden': template.get('hidden', False)
+                }
+        
         st.session_state.metadata_templates = templates
         st.session_state.template_cache_timestamp = time.time()
         logger.info(f'Retrieved {len(templates)} metadata templates')
         return templates
     except Exception as e:
         logger.error(f'Error retrieving metadata templates: {str(e)}')
-        st.session_state.metadata_templates = {}
+        st.session_state.metadata_templates = {} # Ensure it's an empty dict on error
         return {}
 
 def retrieve_templates_by_scope(access_token, scope):
@@ -65,18 +76,19 @@ def retrieve_templates_by_scope(access_token, scope):
                 api_url += f'?marker={next_marker}'
             headers = {'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}
             response = requests.get(api_url, headers=headers)
-            response.raise_for_status()
+            response.raise_for_status() # Will raise an HTTPError for bad responses (4xx or 5xx)
             data = response.json()
             if 'entries' in data:
                 templates.extend(data['entries'])
+            
             if 'next_marker' in data and data['next_marker']:
                 next_marker = data['next_marker']
             else:
-                break
+                break # No more pages
         return templates
     except Exception as e:
         logger.error(f'Error retrieving {scope} templates: {str(e)}')
-        return []
+        return [] # Return empty list on error
 
 def initialize_template_state():
     """
@@ -88,8 +100,21 @@ def initialize_template_state():
     if not hasattr(st.session_state, 'template_cache_timestamp'):
         st.session_state.template_cache_timestamp = None
         logger.info('Initialized template_cache_timestamp in session state')
+    # Add initialization for template_schema_cache here
+    if not hasattr(st.session_state, 'template_schema_cache'):
+        st.session_state.template_schema_cache = {}
+        logger.info('Initialized template_schema_cache in session state')
     if not hasattr(st.session_state, 'document_type_to_template'):
-        st.session_state.document_type_to_template = {'Sales Contract': None, 'Invoices': None, 'Tax': None, 'Financial Report': None, 'Employment Contract': None, 'PII': None, 'Other': None}
+        # Initialize with common document types, or leave empty if dynamically populated
+        st.session_state.document_type_to_template = {
+            'Sales Contract': None, 
+            'Invoices': None, 
+            'Tax': None, 
+            'Financial Report': None, 
+            'Employment Contract': None,
+            'PII': None,
+            'Other': None 
+        }
         logger.info('Initialized document_type_to_template in session state')
 
 def get_template_by_id(template_id):
@@ -105,6 +130,7 @@ def get_template_by_id(template_id):
     if not template_id:
         return None
     if not hasattr(st.session_state, 'metadata_templates') or not st.session_state.metadata_templates:
+        # Could optionally try to fetch templates here if not found, but for now, assume they are pre-loaded
         return None
     return st.session_state.metadata_templates.get(template_id)
 
@@ -136,6 +162,7 @@ def map_document_type_to_template(document_type, template_id):
         template_id: Template ID
     """
     if not hasattr(st.session_state, 'document_type_to_template'):
-        st.session_state.document_type_to_template = {}
+        st.session_state.document_type_to_template = {} # Ensure it exists
     st.session_state.document_type_to_template[document_type] = template_id
     logger.info(f"Mapped document type '{document_type}' to template '{template_id}'")
+
