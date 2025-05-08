@@ -198,8 +198,17 @@ def apply_metadata_to_file_direct_worker(client, file_id, file_name, metadata_va
             try:
                 existing_data = metadata_instance.get()
                 logger.info(f'File ID {file_id}: Existing metadata found for {full_scope}/{template_key}. Updating.')
-                updated_instance = metadata_instance.update(metadata_to_apply)
-                logger.info(f"File ID {file_id}: Successfully updated metadata instance. ETag: {(updated_instance.etag if hasattr(updated_instance, 'etag') else 'N/A')}")
+                md_update = MetadataUpdate()
+                for key_to_update, value_to_update in metadata_to_apply.items():
+                    # Using OP_REPLACE. The SDK's update method with a path like "/fieldKey"
+                    # will typically add the field if it's not present or replace it if it is.
+                    md_update.add_update(MetadataUpdate.OP_REPLACE, f"/{key_to_update}", value_to_update)
+                
+                if md_update.get_updates_list(): # Check if there are any operations to perform
+                    updated_instance = metadata_instance.update(md_update)
+                    logger.info(f"File ID {file_id}: Successfully updated metadata instance. ETag: {(updated_instance.etag if hasattr(updated_instance, 'etag') else 'N/A')}")
+                else:
+                    logger.info(f"File ID {file_id}: No operations to apply for metadata update (metadata_to_apply was empty or resulted in no ops).")
             except exception.BoxAPIException as e:
                 if e.status == 404:
                     logger.info(f'File ID {file_id}: No existing metadata for {full_scope}/{template_key}. Creating.')
