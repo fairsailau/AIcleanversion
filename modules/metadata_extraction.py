@@ -228,18 +228,16 @@ def get_extraction_functions() -> Dict[str, Any]:
                 'type': 'ai_agent_text_gen',
                 'long_text': { 
                     'model': ai_model,
-                    'prompt': enhanced_prompt,
                     'system_message': 'You are an AI assistant that extracts information from documents and returns it as a JSON object. For each field, provide a value and a confidence level (High, Medium, or Low).'
                 },
                 'basic_text': {
                     'model': ai_model,
-                    'prompt': enhanced_prompt,
                     'system_message': 'You are an AI assistant that extracts information from documents and returns it as a JSON object. For each field, provide a value and a confidence level (High, Medium, or Low).'
                 }
             }
             items = [{'id': file_id, 'type': 'file'}]
             api_url = 'https://api.box.com/2.0/ai/text_gen'
-            request_body = {'items': items, 'ai_agent': ai_agent}
+            request_body = {'items': items, 'prompt': enhanced_prompt, 'ai_agent': ai_agent}
 
             logger.info(f'Making Box AI API call for freeform extraction with request: {json.dumps(request_body)}')
             response = requests.post(api_url, headers=headers, json=request_body)
