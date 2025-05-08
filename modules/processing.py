@@ -138,8 +138,11 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     logger.error(err_msg)
                     st.session_state.processing_state['errors'][file_id] = err_msg
                 else:
-                    st.session_state.extraction_results[file_id] = extracted_metadata
-                    st.session_state.processing_state['results'][file_id] = extracted_metadata
+                    st.session_state.extraction_results[file_id] = {
+                        "ai_response": extracted_metadata,
+                        "template_id_used_for_extraction": target_template_id if extraction_method == "structured" else "global_properties"
+                    }
+                    st.session_state.processing_state["results"][file_id] = extracted_metadata # Keep this for immediate UI, but application will use the above structure
                     logger.info(f'Successfully extracted metadata for {file_name} (ID: {file_id})') # Avoid logging potentially large metadata here
             elif file_id not in st.session_state.processing_state['errors']:
                 st.session_state.processing_state['errors'][file_id] = 'Extraction returned no data and no specific error.'
