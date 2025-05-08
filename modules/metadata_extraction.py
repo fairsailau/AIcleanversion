@@ -225,7 +225,7 @@ def get_extraction_functions() -> Dict[str, Any]:
                 enhanced_prompt = prompt + " For each extracted field, provide your confidence level (High, Medium, or Low) in the accuracy of the extraction. Format your response as a JSON object with each field having a nested object containing 'value' and 'confidence'. Example: { \"InvoiceNumber\": { \"value\": \"INV-123\", \"confidence\": \"High\" } }"
 
             ai_agent = {
-                'type': 'ai_agent_text_gen',
+                "type": "ai_agent_extract",
                 'long_text': { 
                     'model': ai_model,
                     'system_message': 'You are an AI assistant that extracts information from documents and returns it as a JSON object. For each field, provide a value and a confidence level (High, Medium, or Low).'
@@ -236,7 +236,7 @@ def get_extraction_functions() -> Dict[str, Any]:
                 }
             }
             items = [{'id': file_id, 'type': 'file'}]
-            api_url = 'https://api.box.com/2.0/ai/text_gen'
+            api_url = 'https://api.box.com/2.0/ai/extract'
             request_body = {'items': items, 'prompt': enhanced_prompt, 'ai_agent': ai_agent}
 
             logger.info(f'Making Box AI API call for freeform extraction with request: {json.dumps(request_body)}')
