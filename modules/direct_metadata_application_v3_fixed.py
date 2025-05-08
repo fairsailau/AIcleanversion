@@ -16,7 +16,7 @@ class ConversionError(ValueError):
     pass
 
 def get_template_schema(client, full_scope, template_key):
-    cache_key = f	'{full_scope}_{template_key}	'
+    cache_key = f'{full_scope}_{template_key}	'
     if cache_key in st.session_state.template_schema_cache:
         logger.info(f	'Using cached schema for {full_scope}/{template_key}	')
         # Return a copy to prevent modification of cached mutable object if schema is None or {}
