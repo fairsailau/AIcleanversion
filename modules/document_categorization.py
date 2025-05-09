@@ -606,85 +606,111 @@ def categorize_document_detailed(file_id: str, model: str, initial_category: str
 
 def parse_categorization_response(response_text: str, valid_categories: List[str]) -> Tuple[str, float, str]:
     """
-    Parse the structured response from the AI to extract category, confidence, and reasoning.
-    Uses a more robust parsing approach that better handles whitespace and formatting variations.
+    Enhanced parsing function that better handles various AI response formats.
+    This improved implementation addresses issues with parsing different model outputs.
     """
     # Default values
     document_type = "Other" 
     confidence = 0.0      
     reasoning = ""        
 
-    try:
-        # More flexible regex patterns that handle various whitespace and formatting
-        category_match = re.search(r"Category:\s*([^\n]+)", response_text, re.IGNORECASE)
-        confidence_match = re.search(r"Confidence:\s*(0\.\d+|1\.0|1)", response_text, re.IGNORECASE)
-        reasoning_match = re.search(r"Reasoning:\s*(.*)", response_text, re.IGNORECASE | re.DOTALL)
+    logger.info(f"Parsing AI response: {response_text[:150]}...")
 
+    try:
+        # First attempt to extract formatted Category/Confidence fields
+        # More robust patterns that can handle variations in output format
+        category_pattern = r"(?:^|\n)(?i)category:[ \t]*([^\n]+)"
+        confidence_pattern = r"(?:^|\n)(?i)confidence:[ \t]*((?:0|1)(?:\.\d+)?|0\.\d+|1\.0|1)"
+        reasoning_pattern = r"(?:^|\n)(?i)reasoning:[ \t]*([\s\S]*?)(?:\n\n|\Z)"
+        
+        category_match = re.search(category_pattern, response_text)
+        confidence_match = re.search(confidence_pattern, response_text)
+        reasoning_match = re.search(reasoning_pattern, response_text)
+        
         if category_match:
             extracted_category = category_match.group(1).strip()
+            logger.info(f"Successfully extracted category from response: '{extracted_category}'")
             
-            # Direct match first (case insensitive)
-            found_match = False
+            # Try exact match first
             for valid_cat in valid_categories:
                 if valid_cat.lower() == extracted_category.lower():
                     document_type = valid_cat
-                    found_match = True
+                    logger.info(f"Exact match found for category: {valid_cat}")
                     break
             
-            # If no direct match, try partial matching
-            if not found_match:
-                for valid_cat in valid_categories:
+            # If no exact match, try partial matching
+            if document_type == "Other":
+                # Sort valid categories by length (descending) to prefer longer matches
+                sorted_categories = sorted(valid_categories, key=len, reverse=True)
+                for valid_cat in sorted_categories:
                     if valid_cat.lower() in extracted_category.lower() or extracted_category.lower() in valid_cat.lower():
                         document_type = valid_cat
-                        logger.warning(f"Partial match for category: extracted '{extracted_category}', matched with '{valid_cat}'.")
-                        found_match = True
+                        logger.warning(f"Partial match for category: extracted '{extracted_category}', matched with '{valid_cat}'")
                         break
-            
-            if not found_match:
-                logger.warning(f"Extracted category '{extracted_category}' not in valid list: {valid_categories}. Defaulting to 'Other'.")
+                
+                if document_type == "Other":
+                    logger.warning(f"No match found for extracted category '{extracted_category}' in valid categories: {valid_categories}")
+                    # Keep 'Other' as the category
         else:
-            logger.warning(f"Could not find 'Category:' line in response: {response_text[:500]}")
+            logger.warning(f"Could not find 'Category:' line in response. Using regex to search for category mentions.")
+            # Try to identify category from the full text if no Category: line is found
+            for valid_cat in valid_categories:
+                # Use word boundary to avoid partial matches within words
+                if re.search(r'\b' + re.escape(valid_cat) + r'\b', response_text, re.IGNORECASE):
+                    document_type = valid_cat
+                    logger.info(f"Found category '{valid_cat}' mentioned in response text")
+                    break
 
+        # Extract confidence value if present
         if confidence_match:
             try:
-                confidence = float(confidence_match.group(1))
-                confidence = max(0.0, min(1.0, confidence))
+                confidence_str = confidence_match.group(1).strip()
+                confidence = float(confidence_str)
+                confidence = max(0.0, min(1.0, confidence))  # Ensure value is between 0 and 1
+                logger.info(f"Successfully extracted confidence: {confidence}")
             except ValueError:
-                logger.warning(f"Could not parse confidence value: {confidence_match.group(1)}. Defaulting to 0.0.")
+                logger.warning(f"Could not convert extracted confidence value '{confidence_match.group(1)}' to float. Defaulting to 0.0")
         else:
-            logger.warning(f"Could not find 'Confidence:' line in response: {response_text[:500]}. Defaulting confidence to 0.5 if category found, else 0.0.")
+            logger.warning(f"Could not find 'Confidence:' line in response. Using default confidence.")
+            # If category was found but confidence wasn't, use a reasonable default
             if document_type != "Other":
-                confidence = 0.5 
-
+                confidence = 0.7  # Use a moderate default confidence when category is found but confidence isn't specified
+            
+        # Extract reasoning if present
         if reasoning_match:
             reasoning = reasoning_match.group(1).strip()
+            logger.info(f"Successfully extracted reasoning (first 100 chars): {reasoning[:100]}")
         else:
-            logger.warning(f"Could not find 'Reasoning:' line in response: {response_text[:500]}")
-            # Try to extract everything that's not category/confidence as reasoning
-            lines = response_text.split("\n")
-            reasoning_lines = [line for line in lines 
-                              if not re.search(r"^Category:", line, re.IGNORECASE) 
-                              and not re.search(r"^Confidence:", line, re.IGNORECASE)]
-            reasoning = "\n".join(reasoning_lines).strip()
+            logger.warning(f"Could not find 'Reasoning:' line in response. Attempting to use all non-category/confidence text as reasoning.")
+            # If no explicit reasoning section, use the rest of the text as reasoning
+            lines = response_text.split('\n')
+            reasoning_lines = []
+            for line in lines:
+                if not re.match(r'^(?i)category:', line.strip()) and not re.match(r'^(?i)confidence:', line.strip()):
+                    reasoning_lines.append(line)
+            reasoning = '\n'.join(reasoning_lines).strip()
+            
             if not reasoning:
-                reasoning = "Reasoning not provided or parsing failed."
-        
-        # If we defaulted to "Other" but can find clues in reasoning, try to extract a category
+                reasoning = "Reasoning not provided in AI response."
+
+        # Final check: if we ended up with 'Other' category but reasoning contains mentions of valid categories,
+        # try to infer the category from reasoning
         if document_type == "Other" and reasoning:
-            # Look for explicit mentions of categories in reasoning
-            for valid_cat in valid_categories:
-                # Look for the category name as a whole word or phrase
-                if re.search(rf'\b{re.escape(valid_cat)}\b', reasoning, re.IGNORECASE):
+            # Sort categories by length (descending) to prefer longer/more specific categories
+            sorted_categories = sorted(valid_categories, key=len, reverse=True)
+            for valid_cat in sorted_categories:
+                if valid_cat.lower() != "other" and re.search(r'\b' + re.escape(valid_cat) + r'\b', reasoning, re.IGNORECASE):
                     document_type = valid_cat
-                    logger.info(f"Inferred category '{valid_cat}' from reasoning as primary parsing failed.")
-                    if confidence == 0.0: 
-                        confidence = 0.4
+                    logger.info(f"Inferred category '{valid_cat}' from reasoning text")
+                    if confidence == 0.0:
+                        confidence = 0.5  # Default confidence when inferring from context
                     break
 
     except Exception as e:
-        logger.error(f"Error parsing categorization response: {str(e)}. Response text: {response_text[:500]}")
-        reasoning = f"Error parsing response: {str(e)}"
+        logger.error(f"Error parsing categorization response: {str(e)}")
+        reasoning = f"Error parsing response: {str(e)}\n\nOriginal response: {response_text}"
 
+    logger.info(f"Final parsing results - Category: {document_type}, Confidence: {confidence:.2f}")
     return document_type, confidence, reasoning
 
 def extract_document_features(file_id: str) -> Dict[str, Any]:
@@ -912,7 +938,9 @@ def get_document_preview_url(file_id: str) -> Optional[str]:
 
 def combine_categorization_results(results: List[Dict[str, Any]], valid_categories: List[str], model_names: List[str] = None) -> Dict[str, Any]:
     """
-    Combine results from multiple models using weighted voting
+    Combine results from multiple models using weighted voting.
+    This implementation uses a sophisticated weighted voting approach where each model's vote is 
+    weighted by its confidence score, following the research on classifier ensembles.
     
     Args:
         results: List of categorization results from different models
@@ -925,8 +953,11 @@ def combine_categorization_results(results: List[Dict[str, Any]], valid_categori
     if not results: 
         return {"document_type": "Other", "confidence": 0.0, "reasoning": "No consensus results"}
     
+    logger.info(f"Combining results from {len(results)} models using weighted voting")
+    
     # Use weighted voting based on confidence scores
     votes = {}
+    model_votes = {}  # Keep track of each model's vote
     reasoning_parts = []
     
     for i, result in enumerate(results):
@@ -941,9 +972,16 @@ def combine_categorization_results(results: List[Dict[str, Any]], valid_categori
         elif "model_name" in result:
             model_name = result["model_name"]
         
+        # Record model vote for reasoning display
+        model_votes[model_name] = {
+            "category": doc_type,
+            "confidence": confidence,
+            "reasoning": reasoning
+        }
+        
         # Add weighted vote (using confidence as weight)
         if doc_type not in votes:
-            votes[doc_type] = 0
+            votes[doc_type] = 0.0
         votes[doc_type] += confidence
         
         # Add reasoning with model name
@@ -951,24 +989,29 @@ def combine_categorization_results(results: List[Dict[str, Any]], valid_categori
     
     # Find document type with highest weighted votes
     if votes:
-        winning_type = max(votes.items(), key=lambda x: x[1])
-        document_type = winning_type[0]
+        # Get all categories sorted by their vote weight (descending)
+        sorted_votes = sorted(votes.items(), key=lambda x: x[1], reverse=True)
+        document_type = sorted_votes[0][0]
+        total_votes = sum(votes.values())
         
         # Calculate overall confidence based on vote distribution
-        total_votes = sum(votes.values())
         if total_votes > 0:
             confidence = votes[document_type] / total_votes
         else:
             confidence = 0.0
+        
+        logger.info(f"Weighted voting results: Winner={document_type}, Confidence={confidence:.2f}, Vote distribution: {votes}")
     else:
         document_type = "Other"
         confidence = 0.0
+        logger.warning("No valid votes cast by models, defaulting to 'Other' category")
     
     # Format consensus models text
     if model_names:
         models_text = ", ".join(model_names)
     else:
-        models_text = "multiple models"
+        model_names_from_results = list(model_votes.keys())
+        models_text = ", ".join(model_names_from_results)
     
     # Format combined reasoning in structured format as shown in screenshot
     combined_reasoning = (
