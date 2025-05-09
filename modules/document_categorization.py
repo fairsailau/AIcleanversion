@@ -1,4 +1,3 @@
-# Copied from /home/ubuntu/document_categorization_fixed_v5.py with UI enhancements
 import streamlit as st
 import logging
 import json
@@ -11,7 +10,7 @@ import altair as alt
 from typing import Dict, Any, List, Optional, Tuple
 
 # Configure logging
-logging.basicConfig(level=logging.INFO,                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s") # Ensure format is on one line
+logging.basicConfig(level=logging.INFO,                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # --- Merged Functions and UI from document_categorization (2).py and (3).py ---
@@ -103,21 +102,21 @@ def document_categorization():
         for name in allowed_model_names:
             if name not in ai_models_with_desc:
                  ai_models_with_desc[name] = f"{name} (Description not found)"
-                 logger.warning(f"Model \t{name}\t from allowed list was missing description, added placeholder.")
+                 logger.warning(f"Model '{name}' from allowed list was missing description, added placeholder.")
         ai_model_names = list(ai_models_with_desc.keys())
         ai_model_options = list(ai_models_with_desc.values())
         if "categorization_ai_model" not in st.session_state:
             st.session_state.categorization_ai_model = ai_model_names[0]
         current_model_name = st.session_state.categorization_ai_model
         if current_model_name not in ai_model_names:
-            logger.warning(f"Previously selected categorization model \t{current_model_name}\t is not allowed. Defaulting to \t{ai_model_names[0]}\t.")
+            logger.warning(f"Previously selected categorization model '{current_model_name}' is not allowed. Defaulting to '{ai_model_names[0]}'.")
             current_model_name = ai_model_names[0]
             st.session_state.categorization_ai_model = current_model_name
         try:
             current_model_desc = ai_models_with_desc.get(current_model_name, ai_model_options[0])
             selected_index = ai_model_options.index(current_model_desc)
         except (ValueError, KeyError):
-            logger.error(f"Error finding index for categorization model \t{current_model_name}\t. Defaulting to first model.")
+            logger.error(f"Error finding index for categorization model '{current_model_name}'. Defaulting to first model.")
             selected_index = 0
             current_model_name = ai_model_names[selected_index]
             st.session_state.categorization_ai_model = current_model_name
@@ -314,7 +313,7 @@ def configure_document_types():
                 )
                 if new_name != current_name and not is_other_type:
                     if any(d["name"] == new_name for j, d in enumerate(st.session_state.document_types) if i != j):
-                        st.warning(f"Document type name \t{new_name}\t already exists.")
+                        st.warning(f"Document type name '{new_name}' already exists.")
                     else:
                         st.session_state.document_types[i]["name"] = new_name
                         logger.info(f"Updated document type name at index {i} to: {new_name}")
@@ -345,7 +344,7 @@ def configure_document_types():
         indices_to_delete.sort(reverse=True)
         for index in indices_to_delete:
             deleted_type = st.session_state.document_types.pop(index)
-            logger.info(f"Deleted document type: {deleted_type.get("name")}")
+            logger.info(f"Deleted document type: {deleted_type.get('name')}")
         st.rerun()
 
     st.write("**Add New Document Type**")
@@ -355,7 +354,7 @@ def configure_document_types():
     if st.button("Add Document Type", key="add_doc_type_button"):
       if new_type_name:
         if any(d["name"] == new_type_name for d in st.session_state.document_types):
-            st.warning(f"Document type name \t{new_type_name}\t already exists.")
+            st.warning(f"Document type name '{new_type_name}' already exists.")
         else:
             new_doc_type = {"name": new_type_name, "description": new_type_desc}
             st.session_state.document_types.append(new_doc_type)
@@ -400,7 +399,7 @@ def display_categorization_results():
             results_data.append({
                 "File Name": result["file_name"],
                 "Document Type": result["document_type"],
-                "Confidence": f"<span style=	color: {confidence_color};	>{confidence_level} ({confidence:.2f})</span>",
+                "Confidence": f"<span style='color: {confidence_color};'>{confidence_level} ({confidence:.2f})</span>",
                 "Status": status
             })
         if results_data:
@@ -414,30 +413,30 @@ def display_categorization_results():
 
         for file_id, result in results.items():
             with st.container():
-                st.write(f"#### {result["file_name"]}")
+                st.write(f"#### {result['file_name']}")
                 col1_detail, col2_detail = st.columns([2, 1])
                 with col1_detail:
-                    st.write(f"**Category:** {result["document_type"]}")
+                    st.write(f"**Category:** {result['document_type']}")
                     
-                    logger.info(f"Debug Detailed View: File {file_id}. Checking \tmulti_factor_confidence\t. Key present: {"multi_factor_confidence" in result}. Value: {result.get("multi_factor_confidence")}")
+                    logger.info(f"Debug Detailed View: File {file_id}. Checking 'multi_factor_confidence'. Key present: {'multi_factor_confidence' in result}. Value: {result.get('multi_factor_confidence')}")
                     if "multi_factor_confidence" in result and result["multi_factor_confidence"]:
-                        logger.info(f"Debug Detailed View: File {file_id}. Rendering \tmulti_factor_confidence\t using display_confidence_visualization.")
+                        logger.info(f"Debug Detailed View: File {file_id}. Rendering 'multi_factor_confidence' using display_confidence_visualization.")
                         with st.expander("Confidence Breakdown", expanded=True):
                              display_confidence_visualization(result["multi_factor_confidence"], result["document_type"], container=st)
                     else: 
-                        logger.info(f"Debug Detailed View: File {file_id}. \tmulti_factor_confidence\t is MISSING or EMPTY. Falling back to simple confidence display.")
+                        logger.info(f"Debug Detailed View: File {file_id}. 'multi_factor_confidence' is MISSING or EMPTY. Falling back to simple confidence display.")
                         confidence = result.get("confidence", 0.0)
                         if confidence >= 0.8: level, color = "High", "#28a745"
                         elif confidence >= 0.6: level, color = "Medium", "#ffc107"
                         else: level, color = "Low", "#dc3545"
-                        st.markdown(f"**Confidence:** <span style=	color:{color};	>{level} ({confidence:.2f})</span>", unsafe_allow_html=True)
+                        st.markdown(f"**Confidence:** <span style='color:{color};'>{level} ({confidence:.2f})</span>", unsafe_allow_html=True)
                     
                     with st.expander("Reasoning", expanded=False):
                         st.write(result.get("reasoning", "No reasoning provided"))
                     if result.get("first_stage_type"):
                         with st.expander("First-Stage Results", expanded=False):
-                            st.write(f"**First-stage category:** {result["first_stage_type"]}")
-                            st.write(f"**First-stage confidence:** {result["first_stage_confidence"]:.2f}")
+                            st.write(f"**First-stage category:** {result['first_stage_type']}")
+                            st.write(f"**First-stage confidence:** {result['first_stage_confidence']:.2f}")
                 with col2_detail:
                     st.write("**Override Category:**")
                     try:
@@ -459,7 +458,7 @@ def display_categorization_results():
                         st.session_state.document_categorization["results"][file_id]["multi_factor_confidence"] = {"overall": 1.0, "ai_reported": 1.0, "response_quality": 1.0, "category_specificity": 1.0, "reasoning_quality": 1.0, "document_features_match": 1.0}
                         st.session_state.document_categorization["results"][file_id]["reasoning"] += "\n\nManually overridden by user."
                         st.session_state.document_categorization["results"][file_id]["status"] = "Accepted"
-                        st.success(f"Category updated to {new_category} for {result["file_name"]}")
+                        st.success(f"Category updated to {new_category} for {result['file_name']}")
                         st.rerun()
                     
                     preview_url = get_document_preview_url(file_id)
@@ -491,7 +490,7 @@ def categorize_document(file_id: str, model: str, document_types_with_desc: List
     }
     
     valid_categories = [dtype["name"] for dtype in document_types_with_desc]
-    category_options_text = "\n".join([f"- {dtype["name"]}: {dtype["description"]}" for dtype in document_types_with_desc])
+    category_options_text = "\n".join([f"- {dtype['name']}: {dtype['description']}" for dtype in document_types_with_desc])
 
     prompt = (
         f"Analyze this document and determine which category it belongs to from the following options:\n"
@@ -553,10 +552,10 @@ def categorize_document_detailed(file_id: str, model: str, initial_category: str
     }
     
     valid_categories = [dtype["name"] for dtype in document_types_with_desc]
-    category_options_text = "\n".join([f"- {dtype["name"]}: {dtype["description"]}" for dtype in document_types_with_desc])
+    category_options_text = "\n".join([f"- {dtype['name']}: {dtype['description']}" for dtype in document_types_with_desc])
 
     prompt = (
-        f"The document was initially categorized as \t{initial_category}\t. " 
+        f"The document was initially categorized as '{initial_category}'. " 
         f"Please perform a more detailed analysis. Consider the following categories and their descriptions:\n" 
         f"{category_options_text}\n\n" 
         f"For each category listed above, provide a score from 0-10 indicating how well the document matches that category, " 
@@ -630,13 +629,13 @@ def parse_categorization_response(response_text: str, valid_categories: List[str
                 for valid_cat in valid_categories:
                     if normalized_extracted_category in valid_cat.lower() or valid_cat.lower() in normalized_extracted_category:
                         document_type = valid_cat
-                        logger.warning(f"Partial match for category: extracted \t{extracted_category}\t, matched with \t{valid_cat}\t.")
+                        logger.warning(f"Partial match for category: extracted '{extracted_category}', matched with '{valid_cat}'.")
                         found_match = True
                         break
             if not found_match:
-                 logger.warning(f"Extracted category \t{extracted_category}\t not in valid list: {valid_categories}. Defaulting to \tOther\t.")
+                 logger.warning(f"Extracted category '{extracted_category}' not in valid list: {valid_categories}. Defaulting to 'Other'.")
         else:
-            logger.warning(f"Could not find \tCategory:\t line in response: {response_text[:500]}")
+            logger.warning(f"Could not find 'Category:' line in response: {response_text[:500]}")
 
         if confidence_match:
             try:
@@ -645,14 +644,14 @@ def parse_categorization_response(response_text: str, valid_categories: List[str
             except ValueError:
                 logger.warning(f"Could not parse confidence value: {confidence_match.group(1)}. Defaulting to 0.0.")
         else:
-            logger.warning(f"Could not find \tConfidence:\t line in response: {response_text[:500]}. Defaulting confidence to 0.5 if category found, else 0.0.")
+            logger.warning(f"Could not find 'Confidence:' line in response: {response_text[:500]}. Defaulting confidence to 0.5 if category found, else 0.0.")
             if document_type != "Other":
                 confidence = 0.5 
 
         if reasoning_match:
             reasoning = reasoning_match.group(1).strip()
         else:
-            logger.warning(f"Could not find \tReasoning:\t line in response: {response_text[:500]}")
+            logger.warning(f"Could not find 'Reasoning:' line in response: {response_text[:500]}")
             lines = response_text.split("\n")
             reasoning_lines = [line for line in lines if not line.lower().startswith("category:") and not line.lower().startswith("confidence:")]
             reasoning = "\n".join(reasoning_lines).strip()
@@ -663,7 +662,7 @@ def parse_categorization_response(response_text: str, valid_categories: List[str
             for valid_cat in valid_categories:
                 if valid_cat.lower() in reasoning.lower():
                     document_type = valid_cat
-                    logger.info(f"Inferred category \t{valid_cat}\t from reasoning as primary parsing failed.")
+                    logger.info(f"Inferred category '{valid_cat}' from reasoning as primary parsing failed.")
                     if confidence == 0.0: confidence = 0.4
                     break
 
@@ -750,16 +749,30 @@ def display_confidence_visualization(confidence_data: dict, category: str, conta
     overall_confidence = confidence_data.get("overall", 0.0)
     
     if overall_confidence >= 0.8: 
-        level, color = "High", "#28a745" # Green
+        level, color = "High", "#28a745"  # Green
     elif overall_confidence >= 0.6: 
-        level, color = "Medium", "#ffc107" # Yellow
+        level, color = "Medium", "#ffc107"  # Yellow
     else: 
-        level, color = "Low", "#dc3545" # Red
+        level, color = "Low", "#dc3545"  # Red
 
-    container.markdown(f"**Overall Confidence:** <span style=	color:{color};	>{level} ({overall_confidence:.2f})</span>", unsafe_allow_html=True)
+    # Create confidence meter with enhanced styling
+    container.markdown(
+        f"""
+        <div style="margin-bottom: 10px;">
+            <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                <div style="font-weight: bold; margin-right: 10px;">Overall Confidence:</div>
+                <div style="font-weight: bold; color: {color};">{level} ({overall_confidence:.2f})</div>
+            </div>
+            <div style="width: 100%; background-color: #f0f0f0; height: 10px; border-radius: 5px; overflow: hidden;">
+                <div style="width: {overall_confidence*100}%; background-color: {color}; height: 100%;"></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
     
     factors_display = {
-        "ai_reported": "AI Reported Confidence",
+        "ai_reported": "AI Model",
         "response_quality": "Response Quality",
         "category_specificity": "Category Specificity",
         "reasoning_quality": "Reasoning Quality",
@@ -768,21 +781,34 @@ def display_confidence_visualization(confidence_data: dict, category: str, conta
     
     explanations = get_confidence_explanation(confidence_data, category)
 
+    # Display confidence factors with enhanced styling
     for factor_key, factor_name in factors_display.items():
         value = confidence_data.get(factor_key)
         explanation_text = explanations.get("factors", {}).get(factor_key, "No explanation available.")
         
         if value is not None:
-            # Use columns for layout: Factor Name | Bar | Value | Help Icon
-            col_name, col_bar, col_value, col_help = container.columns([3, 4, 1, 1])
-            with col_name:
-                st.markdown(f"<div style=	padding-top: 8px;	>{factor_name}</div>", unsafe_allow_html=True)
-            with col_bar:
-                st.progress(value)
-            with col_value:
-                st.markdown(f"<div style=	padding-top: 8px;	>{value:.2f}</div>", unsafe_allow_html=True)
-            with col_help:
-                st.markdown(f"<div style=	padding-top: 8px;	><span title=	{explanation_text}	>&#9432;</span></div>", unsafe_allow_html=True) # Unicode circled i for info
+            # Determine factor color
+            if value >= 0.8:
+                factor_color = "#28a745"  # Green
+            elif value >= 0.6:
+                factor_color = "#ffc107"  # Yellow
+            else:
+                factor_color = "#dc3545"  # Red
+            
+            # Display factor with styled meter and help icon
+            container.markdown(
+                f"""
+                <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                    <div style="width: 150px;">{factor_name}:</div>
+                    <div style="flex-grow: 1; background-color: #f0f0f0; height: 8px; border-radius: 4px; overflow: hidden; margin: 0 10px;">
+                        <div style="width: {value*100}%; background-color: {factor_color}; height: 100%;"></div>
+                    </div>
+                    <div style="width: 40px; text-align: right; color: {factor_color};">{value:.2f}</div>
+                    <div style="width: 20px; text-align: center; margin-left: 5px;"><span title="{explanation_text}">&#9432;</span></div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
         else:
             container.markdown(f"- **{factor_name}:** N/A")
 
@@ -791,15 +817,15 @@ def get_confidence_explanation(confidence_data: dict, category: str) -> dict:
     explanations = {"overall": "", "factors": {}}
     overall_confidence = confidence_data.get("overall", 0.0)
 
-    if overall_confidence >= 0.8: explanations["overall"] = f"The system is highly confident that the document is a \t{category}\t."
-    elif overall_confidence >= 0.6: explanations["overall"] = f"The system has medium confidence that the document is a \t{category}\t. Manual review is recommended."
-    else: explanations["overall"] = f"The system has low confidence that the document is a \t{category}\t. Manual review is strongly recommended."
+    if overall_confidence >= 0.8: explanations["overall"] = f"The system is highly confident that the document is a '{category}'."
+    elif overall_confidence >= 0.6: explanations["overall"] = f"The system has medium confidence that the document is a '{category}'. Manual review is recommended."
+    else: explanations["overall"] = f"The system has low confidence that the document is a '{category}'. Manual review is strongly recommended."
 
-    explanations["factors"]["ai_reported"] = f"The AI model initially reported a confidence of {confidence_data.get("ai_reported", 0.0):.2f}. This is the raw confidence score from the AI model before any adjustments."
-    explanations["factors"]["response_quality"] = f"The quality of the AI response structure was assessed as {confidence_data.get("response_quality", 0.0):.2f}. Good structure includes clear category, confidence, and reasoning. Poor structure or parsing errors lower this score."
-    explanations["factors"]["category_specificity"] = f"The specificity of the assigned category (\t{category}\t) contributed {confidence_data.get("category_specificity", 0.0):.2f} to the score. Specific, non-\tOther\t categories score higher, reflecting a more precise classification."
-    explanations["factors"]["reasoning_quality"] = f"The AI\ts reasoning quality was rated {confidence_data.get("reasoning_quality", 0.0):.2f}, based on the length and presence of keywords like \tevidence\t or \tfeature\t. More detailed and relevant reasoning increases this score."
-    explanations["factors"]["document_features_match"] = f"The match between document features (e.g., file extension, size) and the typical characteristics of the assigned category was {confidence_data.get("document_features_match", 0.0):.2f}. This is a simplified factor and may be expanded in future versions."
+    explanations["factors"]["ai_reported"] = f"The AI model initially reported a confidence of {confidence_data.get('ai_reported', 0.0):.2f}. This is the raw confidence score from the AI model before any adjustments."
+    explanations["factors"]["response_quality"] = f"The quality of the AI response structure was assessed as {confidence_data.get('response_quality', 0.0):.2f}. Good structure includes clear category, confidence, and reasoning. Poor structure or parsing errors lower this score."
+    explanations["factors"]["category_specificity"] = f"The specificity of the assigned category ('{category}') contributed {confidence_data.get('category_specificity', 0.0):.2f} to the score. Specific, non-'Other' categories score higher, reflecting a more precise classification."
+    explanations["factors"]["reasoning_quality"] = f"The AI's reasoning quality was rated {confidence_data.get('reasoning_quality', 0.0):.2f}, based on the length and presence of keywords like 'evidence' or 'feature'. More detailed and relevant reasoning increases this score."
+    explanations["factors"]["document_features_match"] = f"The match between document features (e.g., file extension, size) and the typical characteristics of the assigned category was {confidence_data.get('document_features_match', 0.0):.2f}. This is a simplified factor and may be expanded in future versions."
     
     return explanations
 
@@ -810,15 +836,15 @@ def configure_confidence_thresholds():
     
     st.session_state.confidence_thresholds["auto_accept"] = st.slider(
         "Auto-Accept Threshold", 0.0, 1.0, st.session_state.confidence_thresholds["auto_accept"], 0.05,
-        help="Documents with calibrated confidence above this will be marked \tAccepted\t."
+        help="Documents with calibrated confidence above this will be marked 'Accepted'."
     )
     st.session_state.confidence_thresholds["verification"] = st.slider(
         "Verification Threshold", 0.0, 1.0, st.session_state.confidence_thresholds["verification"], 0.05,
-        help="Documents with calibrated confidence below Auto-Accept but above this will be marked \tNeeds Verification\t."
+        help="Documents with calibrated confidence below Auto-Accept but above this will be marked 'Needs Verification'."
     )
     st.session_state.confidence_thresholds["rejection"] = st.slider(
         "Rejection Threshold", 0.0, 1.0, st.session_state.confidence_thresholds["rejection"], 0.05,
-        help="Documents with calibrated confidence below this will be marked \tRejected\t (Not currently used for status, but available)."
+        help="Documents with calibrated confidence below this will be marked 'Rejected' (Not currently used for status, but available)."
     )
 
 def apply_confidence_thresholds(results: Dict[str, Dict]) -> Dict[str, Dict]:
@@ -836,7 +862,7 @@ def apply_confidence_thresholds(results: Dict[str, Dict]) -> Dict[str, Dict]:
 
 def save_categorization_feedback(file_id: str, original_category: str, new_category: str, rating: Optional[int] = None, comments: Optional[str] = None):
     """Save user feedback for categorization (Placeholder)"""
-    logger.info(f"Feedback for {file_id}: Original=\t{original_category}\t, New=\t{new_category}\t, Rating={rating}, Comments=\t{comments}\t")
+    logger.info(f"Feedback for {file_id}: Original='{original_category}', New='{new_category}', Rating={rating}, Comments='{comments}'")
 
 def collect_user_feedback(file_id, result_data):
     """UI for collecting user feedback (Placeholder)"""
@@ -844,7 +870,7 @@ def collect_user_feedback(file_id, result_data):
     cols = st.columns(5)
     rating = 0
     for i in range(5):
-        if cols[i].button(f"{i+1} \tstar:", key=f"rating_{file_id}_{i}"):
+        if cols[i].button(f"{i+1} 'star:", key=f"rating_{file_id}_{i}"):
             rating = i + 1
     comments = st.text_area("Comments (optional)", key=f"comments_{file_id}")
     if rating > 0:
@@ -895,4 +921,3 @@ def combine_categorization_results(results: List[Dict[str, Any]], valid_categori
 def validate_confidence_with_examples():
     """UI for validating confidence with example documents (Placeholder)"""
     st.write("Upload example documents to validate confidence scoring (Not Implemented).")
-
