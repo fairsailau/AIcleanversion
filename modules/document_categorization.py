@@ -562,6 +562,7 @@ def categorize_document_detailed(file_id: str, model: str, initial_category: str
         f"along with specific evidence from the document supporting your score.\n\n" 
         f"Finally, provide your definitive categorization ONLY in the following format (exactly two lines, followed by reasoning on a new line):\n" 
         f"Category: [selected category name]\n"
+        f"Confidence: [confidence score between 0.0 and 1.0, where 1.0 is highest confidence]\n"
         f"Reasoning: [detailed explanation with specific evidence from the document supporting your final choice, referencing the scoring and initial category if relevant]"
     )
     logger.info(f"Box AI Detailed Request Prompt for file {file_id} (model: {model}):\n{prompt}")
@@ -606,34 +607,41 @@ def categorize_document_detailed(file_id: str, model: str, initial_category: str
 def parse_categorization_response(response_text: str, valid_categories: List[str]) -> Tuple[str, float, str]:
     """
     Parse the structured response from the AI to extract category, confidence, and reasoning.
+    Uses a more robust parsing approach that better handles whitespace and formatting variations.
     """
+    # Default values
     document_type = "Other" 
     confidence = 0.0      
     reasoning = ""        
 
     try:
-        category_match = re.search(r"^Category:\s*(.*?)$", response_text, re.MULTILINE | re.IGNORECASE)
-        confidence_match = re.search(r"^Confidence:\s*([0-9.]+)", response_text, re.MULTILINE | re.IGNORECASE)
-        reasoning_match = re.search(r"^Reasoning:\s*(.*)", response_text, re.MULTILINE | re.IGNORECASE | re.DOTALL)
+        # More flexible regex patterns that handle various whitespace and formatting
+        category_match = re.search(r"Category:\s*([^\n]+)", response_text, re.IGNORECASE)
+        confidence_match = re.search(r"Confidence:\s*(0\.\d+|1\.0|1)", response_text, re.IGNORECASE)
+        reasoning_match = re.search(r"Reasoning:\s*(.*)", response_text, re.IGNORECASE | re.DOTALL)
 
         if category_match:
             extracted_category = category_match.group(1).strip()
-            normalized_extracted_category = extracted_category.lower()
+            
+            # Direct match first (case insensitive)
             found_match = False
             for valid_cat in valid_categories:
-                if valid_cat.lower() == normalized_extracted_category:
+                if valid_cat.lower() == extracted_category.lower():
                     document_type = valid_cat
                     found_match = True
                     break
+            
+            # If no direct match, try partial matching
             if not found_match:
                 for valid_cat in valid_categories:
-                    if normalized_extracted_category in valid_cat.lower() or valid_cat.lower() in normalized_extracted_category:
+                    if valid_cat.lower() in extracted_category.lower() or extracted_category.lower() in valid_cat.lower():
                         document_type = valid_cat
                         logger.warning(f"Partial match for category: extracted '{extracted_category}', matched with '{valid_cat}'.")
                         found_match = True
                         break
+            
             if not found_match:
-                 logger.warning(f"Extracted category '{extracted_category}' not in valid list: {valid_categories}. Defaulting to 'Other'.")
+                logger.warning(f"Extracted category '{extracted_category}' not in valid list: {valid_categories}. Defaulting to 'Other'.")
         else:
             logger.warning(f"Could not find 'Category:' line in response: {response_text[:500]}")
 
@@ -652,18 +660,25 @@ def parse_categorization_response(response_text: str, valid_categories: List[str
             reasoning = reasoning_match.group(1).strip()
         else:
             logger.warning(f"Could not find 'Reasoning:' line in response: {response_text[:500]}")
+            # Try to extract everything that's not category/confidence as reasoning
             lines = response_text.split("\n")
-            reasoning_lines = [line for line in lines if not line.lower().startswith("category:") and not line.lower().startswith("confidence:")]
+            reasoning_lines = [line for line in lines 
+                              if not re.search(r"^Category:", line, re.IGNORECASE) 
+                              and not re.search(r"^Confidence:", line, re.IGNORECASE)]
             reasoning = "\n".join(reasoning_lines).strip()
             if not reasoning:
-                 reasoning = "Reasoning not provided or parsing failed."
+                reasoning = "Reasoning not provided or parsing failed."
         
+        # If we defaulted to "Other" but can find clues in reasoning, try to extract a category
         if document_type == "Other" and reasoning:
+            # Look for explicit mentions of categories in reasoning
             for valid_cat in valid_categories:
-                if valid_cat.lower() in reasoning.lower():
+                # Look for the category name as a whole word or phrase
+                if re.search(rf'\b{re.escape(valid_cat)}\b', reasoning, re.IGNORECASE):
                     document_type = valid_cat
                     logger.info(f"Inferred category '{valid_cat}' from reasoning as primary parsing failed.")
-                    if confidence == 0.0: confidence = 0.4
+                    if confidence == 0.0: 
+                        confidence = 0.4
                     break
 
     except Exception as e:
