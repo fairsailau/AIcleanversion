@@ -212,13 +212,13 @@ def document_categorization():
                                 for i, model_name_iter in enumerate(consensus_models):
                                     model_status.text(f"Processing with {model_name_iter}...")
                                     result = categorize_document(file_id, model_name_iter, document_types_with_desc)
+                                    # Store model name with result for display in reasoning
+                                    result["model_name"] = model_name_iter
                                     consensus_results.append(result)
                                     model_progress.progress((i + 1) / len(consensus_models))
                                 model_progress.empty()
                                 model_status.empty()
-                                result = combine_categorization_results(consensus_results, valid_categories)
-                                models_text = ", ".join(consensus_models)
-                                result["reasoning"] = f"Consensus from models: {models_text}\n\n" + result["reasoning"]
+                                result = combine_categorization_results(consensus_results, valid_categories, consensus_models)
                             else:
                                 result = categorize_document(file_id, selected_model, document_types_with_desc)
                                 if use_two_stage and result["confidence"] < confidence_threshold:
@@ -817,7 +817,7 @@ def display_confidence_visualization(confidence_data: dict, category: str, conta
     - **Response Quality**: How well-structured the AI response was
     - **Category Specificity**: How specific and definitive the category assignment is
     - **Reasoning Quality**: How detailed and specific the reasoning is
-    - **Document Features**: How well document features match the assigned category
+    - **Document Features Match**: How well document features match the assigned category
     """)
 
 def get_confidence_explanation(confidence_data: dict, category: str) -> dict:
@@ -895,46 +895,79 @@ def get_document_preview_url(file_id: str) -> Optional[str]:
         logger.error(f"Could not get preview URL for {file_id}: {e}")
         return None
 
-def combine_categorization_results(results: List[Dict[str, Any]], valid_categories: List[str]) -> Dict[str, Any]:
-    """Combine results from multiple models with detailed reasoning"""
-    if not results: return {"document_type": "Other", "confidence": 0.0, "reasoning": "No consensus results"}
+def combine_categorization_results(results: List[Dict[str, Any]], valid_categories: List[str], model_names: List[str] = None) -> Dict[str, Any]:
+    """
+    Combine results from multiple models using weighted voting
     
-    # Count votes for each document type
-    category_counts = {}
-    category_confidences = {}
+    Args:
+        results: List of categorization results from different models
+        valid_categories: List of valid document categories
+        model_names: List of model names corresponding to results
+        
+    Returns:
+        dict: Combined categorization result with weighted voting
+    """
+    if not results: 
+        return {"document_type": "Other", "confidence": 0.0, "reasoning": "No consensus results"}
+    
+    # Use weighted voting based on confidence scores
+    votes = {}
     reasoning_parts = []
     
-    for res in results:
-        cat = res.get("document_type", "Other")
-        conf = res.get("confidence", 0.0)
-        reason = res.get("reasoning", "")
+    for i, result in enumerate(results):
+        doc_type = result.get("document_type", "Other")
+        confidence = result.get("confidence", 0.0)
+        reasoning = result.get("reasoning", "")
         
-        # Track category votes and confidences
-        category_counts[cat] = category_counts.get(cat, 0) + 1
-        current_total_conf, current_count = category_confidences.get(cat, (0.0, 0))
-        category_confidences[cat] = (current_total_conf + conf, current_count + 1)
+        # Get model name if available
+        model_name = "Unknown Model"
+        if model_names and i < len(model_names):
+            model_name = model_names[i]
+        elif "model_name" in result:
+            model_name = result["model_name"]
         
-        # Add to reasoning parts
-        reasoning_parts.append(f"Model vote: {cat} (confidence: {conf:.2f}) Reasoning: {reason}")
+        # Add weighted vote (using confidence as weight)
+        if doc_type not in votes:
+            votes[doc_type] = 0
+        votes[doc_type] += confidence
+        
+        # Add reasoning with model name
+        reasoning_parts.append(f"Model vote: {doc_type} (confidence: {confidence:.2f}) Reasoning: {reasoning}")
     
-    if not category_counts:
-        return {"document_type": "Other", "confidence": 0.0, "reasoning": "Consensus failed: No categories found."}
-
-    # Find the category with the most votes
-    final_category = max(category_counts, key=category_counts.get)
+    # Find document type with highest weighted votes
+    if votes:
+        winning_type = max(votes.items(), key=lambda x: x[1])
+        document_type = winning_type[0]
+        
+        # Calculate overall confidence based on vote distribution
+        total_votes = sum(votes.values())
+        if total_votes > 0:
+            confidence = votes[document_type] / total_votes
+        else:
+            confidence = 0.0
+    else:
+        document_type = "Other"
+        confidence = 0.0
     
-    # Calculate the average confidence for the winning category
-    total_conf, count = category_confidences.get(final_category, (0.0, 1))
-    final_confidence = total_conf / count if count > 0 else 0.0
+    # Format consensus models text
+    if model_names:
+        models_text = ", ".join(model_names)
+    else:
+        models_text = "multiple models"
     
-    # Create combined reasoning with individual model votes
+    # Format combined reasoning in structured format as shown in screenshot
     combined_reasoning = (
+        f"Consensus from models: {models_text}\n\n"
         f"Combined result from multiple models:\n\n"
-        f"Final category: {final_category} (confidence: {final_confidence:.2f})\n\n"
+        f"Final category: {document_type} (confidence: {confidence:.2f})\n\n"
         f"Individual model results:\n\n" + "\n\n".join(reasoning_parts)
     )
     
-    return {"document_type": final_category, "confidence": final_confidence, "reasoning": combined_reasoning}
+    return {
+        "document_type": document_type,
+        "confidence": confidence,
+        "reasoning": combined_reasoning
+    }
 
 def validate_confidence_with_examples():
     """UI for validating confidence with example documents (Placeholder)"""
