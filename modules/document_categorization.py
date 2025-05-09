@@ -10,7 +10,7 @@ import altair as alt
 from typing import Dict, Any, List, Optional, Tuple
 
 # Configure logging
-logging.basicConfig(level=logging.INFO,                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # --- Merged Functions and UI from document_categorization (2).py and (3).py ---
@@ -784,7 +784,6 @@ def display_confidence_visualization(confidence_data: dict, category: str, conta
     # Display confidence factors with enhanced styling
     for factor_key, factor_name in factors_display.items():
         value = confidence_data.get(factor_key)
-        explanation_text = explanations.get("factors", {}).get(factor_key, "No explanation available.")
         
         if value is not None:
             # Determine factor color
@@ -804,13 +803,22 @@ def display_confidence_visualization(confidence_data: dict, category: str, conta
                         <div style="width: {value*100}%; background-color: {factor_color}; height: 100%;"></div>
                     </div>
                     <div style="width: 40px; text-align: right; color: {factor_color};">{value:.2f}</div>
-                    <div style="width: 20px; text-align: center; margin-left: 5px;"><span title="{explanation_text}">&#9432;</span></div>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
         else:
             container.markdown(f"- **{factor_name}:** N/A")
+
+    # Display explanations after the meters
+    container.markdown("**Confidence Factors Explained:**")
+    container.markdown("""
+    - **AI Model**: Confidence reported directly by the AI model
+    - **Response Quality**: How well-structured the AI response was
+    - **Category Specificity**: How specific and definitive the category assignment is
+    - **Reasoning Quality**: How detailed and specific the reasoning is
+    - **Document Features**: How well document features match the assigned category
+    """)
 
 def get_confidence_explanation(confidence_data: dict, category: str) -> dict:
     """Generate human-readable explanations of confidence scores."""
@@ -888,35 +896,45 @@ def get_document_preview_url(file_id: str) -> Optional[str]:
         return None
 
 def combine_categorization_results(results: List[Dict[str, Any]], valid_categories: List[str]) -> Dict[str, Any]:
-    """Combine results from multiple models (Placeholder)"""
+    """Combine results from multiple models with detailed reasoning"""
     if not results: return {"document_type": "Other", "confidence": 0.0, "reasoning": "No consensus results"}
     
+    # Count votes for each document type
     category_counts = {}
     category_confidences = {}
-    category_reasonings = {}
-
+    reasoning_parts = []
+    
     for res in results:
         cat = res.get("document_type", "Other")
         conf = res.get("confidence", 0.0)
         reason = res.get("reasoning", "")
         
+        # Track category votes and confidences
         category_counts[cat] = category_counts.get(cat, 0) + 1
         current_total_conf, current_count = category_confidences.get(cat, (0.0, 0))
         category_confidences[cat] = (current_total_conf + conf, current_count + 1)
-        if cat not in category_reasonings or len(reason) > len(category_reasonings.get(cat, "")):
-            category_reasonings[cat] = reason
-            
+        
+        # Add to reasoning parts
+        reasoning_parts.append(f"Model vote: {cat} (confidence: {conf:.2f}) Reasoning: {reason}")
+    
     if not category_counts:
         return {"document_type": "Other", "confidence": 0.0, "reasoning": "Consensus failed: No categories found."}
 
+    # Find the category with the most votes
     final_category = max(category_counts, key=category_counts.get)
     
+    # Calculate the average confidence for the winning category
     total_conf, count = category_confidences.get(final_category, (0.0, 1))
     final_confidence = total_conf / count if count > 0 else 0.0
     
-    final_reasoning = category_reasonings.get(final_category, "Consensus reasoning not available.")
+    # Create combined reasoning with individual model votes
+    combined_reasoning = (
+        f"Combined result from multiple models:\n\n"
+        f"Final category: {final_category} (confidence: {final_confidence:.2f})\n\n"
+        f"Individual model results:\n\n" + "\n\n".join(reasoning_parts)
+    )
     
-    return {"document_type": final_category, "confidence": final_confidence, "reasoning": final_reasoning}
+    return {"document_type": final_category, "confidence": final_confidence, "reasoning": combined_reasoning}
 
 def validate_confidence_with_examples():
     """UI for validating confidence with example documents (Placeholder)"""
