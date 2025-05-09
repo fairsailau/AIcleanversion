@@ -606,8 +606,8 @@ def categorize_document_detailed(file_id: str, model: str, initial_category: str
 
 def parse_categorization_response(response_text: str, valid_categories: List[str]) -> Tuple[str, float, str]:
     """
-    Enhanced parsing function that better handles various AI response formats.
-    This improved implementation addresses issues with parsing different model outputs.
+    Parse the structured response from the AI to extract category, confidence, and reasoning.
+    Uses a more robust parsing approach that handles Python 3.11+ regex flag requirements.
     """
     # Default values
     document_type = "Other" 
@@ -617,21 +617,18 @@ def parse_categorization_response(response_text: str, valid_categories: List[str
     logger.info(f"Parsing AI response: {response_text[:150]}...")
 
     try:
-        # First attempt to extract formatted Category/Confidence fields
-        # More robust patterns that can handle variations in output format
-        category_pattern = r"(?:^|\n)(?i)category:[ \t]*([^\n]+)"
-        confidence_pattern = r"(?:^|\n)(?i)confidence:[ \t]*((?:0|1)(?:\.\d+)?|0\.\d+|1\.0|1)"
-        reasoning_pattern = r"(?:^|\n)(?i)reasoning:[ \t]*([\s\S]*?)(?:\n\n|\Z)"
-        
-        category_match = re.search(category_pattern, response_text)
-        confidence_match = re.search(confidence_pattern, response_text)
-        reasoning_match = re.search(reasoning_pattern, response_text)
-        
+        # Use inline flags (?i) instead of re.IGNORECASE and (?s) instead of re.DOTALL
+        # This fixes the "global flags not at the start" error in Python 3.11+
+        category_match = re.search(r"(?i)Category:\s*([^\n]+)", response_text)
+        confidence_match = re.search(r"(?i)Confidence:\s*(0\.\d+|1\.0|1)", response_text)
+        reasoning_match = re.search(r"(?is)Reasoning:\s*(.*)", response_text)  # (?is) combines IGNORECASE and DOTALL flags
+
         if category_match:
             extracted_category = category_match.group(1).strip()
             logger.info(f"Successfully extracted category from response: '{extracted_category}'")
             
-            # Try exact match first
+            # Direct match first (case insensitive)
+            found_match = False
             for valid_cat in valid_categories:
                 if valid_cat.lower() == extracted_category.lower():
                     document_type = valid_cat
@@ -650,13 +647,12 @@ def parse_categorization_response(response_text: str, valid_categories: List[str
                 
                 if document_type == "Other":
                     logger.warning(f"No match found for extracted category '{extracted_category}' in valid categories: {valid_categories}")
-                    # Keep 'Other' as the category
         else:
             logger.warning(f"Could not find 'Category:' line in response. Using regex to search for category mentions.")
             # Try to identify category from the full text if no Category: line is found
             for valid_cat in valid_categories:
                 # Use word boundary to avoid partial matches within words
-                if re.search(r'\b' + re.escape(valid_cat) + r'\b', response_text, re.IGNORECASE):
+                if re.search(r"(?i)\b" + re.escape(valid_cat) + r"\b", response_text):
                     document_type = valid_cat
                     logger.info(f"Found category '{valid_cat}' mentioned in response text")
                     break
@@ -686,12 +682,13 @@ def parse_categorization_response(response_text: str, valid_categories: List[str
             lines = response_text.split('\n')
             reasoning_lines = []
             for line in lines:
-                if not re.match(r'^(?i)category:', line.strip()) and not re.match(r'^(?i)confidence:', line.strip()):
+                # Using simpler string contains check instead of regex
+                if not line.lower().startswith("category:") and not line.lower().startswith("confidence:"):
                     reasoning_lines.append(line)
             reasoning = '\n'.join(reasoning_lines).strip()
             
             if not reasoning:
-                reasoning = "Reasoning not provided in AI response."
+                 reasoning = "Reasoning not provided in AI response."
 
         # Final check: if we ended up with 'Other' category but reasoning contains mentions of valid categories,
         # try to infer the category from reasoning
@@ -699,7 +696,7 @@ def parse_categorization_response(response_text: str, valid_categories: List[str
             # Sort categories by length (descending) to prefer longer/more specific categories
             sorted_categories = sorted(valid_categories, key=len, reverse=True)
             for valid_cat in sorted_categories:
-                if valid_cat.lower() != "other" and re.search(r'\b' + re.escape(valid_cat) + r'\b', reasoning, re.IGNORECASE):
+                if valid_cat.lower() != "other" and re.search(r"(?i)\b" + re.escape(valid_cat) + r"\b", reasoning):
                     document_type = valid_cat
                     logger.info(f"Inferred category '{valid_cat}' from reasoning text")
                     if confidence == 0.0:
