@@ -158,13 +158,13 @@ def developer_token_authentication_secrets():
     st.subheader('Developer Token Authentication (using Streamlit Secrets)')
     st.warning('Developer tokens expire after 60 minutes and are for testing only.')
     #st.write('DEBUG: Checking st.secrets.box_dev:', st.secrets.get('box_dev'))
-    #secrets_ok, _ = check_secrets_available([{'box_dev': ['client_id', 'client_secret', 'developer_token']}])
-    #if not secrets_ok:
+    secrets_ok, _ = check_secrets_available([{'box_dev': ['client_id', 'client_secret', 'developer_token']}])
+    if not secrets_ok:
         return
-    #box_dev_secrets = st.secrets['box_dev']
-    #client_id = box_dev_secrets['client_id']
-    #client_secret = box_dev_secrets['client_secret']
-    #developer_token = box_dev_secrets['developer_token']
+    box_dev_secrets = st.secrets['box_dev']
+    client_id = box_dev_secrets['client_id']
+    client_secret = box_dev_secrets['client_secret']
+    developer_token = box_dev_secrets['developer_token']
     if st.button('Authenticate using Developer Token Secret'):
         try:
             with st.spinner('Authenticating using Developer Token...'):
