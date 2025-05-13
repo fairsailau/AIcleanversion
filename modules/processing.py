@@ -11,6 +11,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 from .metadata_extraction import get_extraction_functions
 from .direct_metadata_application_v3_fixed import apply_metadata_to_file_direct_worker, parse_template_id, get_template_schema
+from .validation_engine import ValidationRuleLoader, Validator, ConfidenceAdjuster
 
 def get_template_id_for_file(file_id: str, file_doc_type: Optional[str], session_state: Dict[str, Any]) -> Optional[str]:
     """Determines the template ID for a file based on config and categorization."""
@@ -41,16 +42,37 @@ def get_template_id_for_file(file_id: str, file_doc_type: Optional[str], session
     return None
 
 def get_fields_for_ai_from_template(client: Any, scope: str, template_key: str) -> Optional[List[Dict[str, Any]]]:
-    """Fetches template schema and formats fields for the AI extraction API."""
-    schema = get_template_schema(client, scope, template_key)
-    if schema:
+    """Fetches template schema and formats fields for the AI extraction API, including descriptions."""
+    schema_details = get_template_schema(client, scope, template_key)
+    if schema_details and isinstance(schema_details, dict):
         ai_fields = []
-        for field_key, field_type in schema.items():
-            # Ensure display name is reasonably formatted if not explicitly provided by schema
-            display_name = field_key.replace('_', ' ').title()
-            ai_fields.append({'key': field_key, 'type': field_type, 'displayName': display_name})
+        for field_key, details in schema_details.items():
+            if isinstance(details, dict):
+                # Construct the field object for the AI, ensuring all relevant details are included
+                # The metadata_extraction.py module expects 'key', 'type', 'displayName', and optionally 'description', 'prompt', 'options'
+                field_for_ai = {
+                    'key': field_key,
+                    'type': details.get('type', 'string'), # Default to string if type is missing
+                    'displayName': details.get('displayName', field_key.replace('_', ' ').title())
+                }
+                if 'description' in details and details['description']:
+                    field_for_ai['description'] = details['description']
+                # Add other potential fields if they exist in schema details and are supported by AI call
+                # For example, if schema_details could contain 'prompt' or 'options' for enum
+                if 'prompt' in details:
+                    field_for_ai['prompt'] = details['prompt']
+                if details.get('type') == 'enum' and 'options' in details:
+                    field_for_ai['options'] = details['options']
+                ai_fields.append(field_for_ai)
+            else:
+                logger.warning(f"Skipping field {field_key} in get_fields_for_ai_from_template due to unexpected details format: {details}")
         return ai_fields
-    return None
+    elif schema_details is None: # Explicitly handle None case (error fetching schema)
+        logger.error(f"Schema for {scope}/{template_key} could not be retrieved (returned None).")
+        return None
+    else: # Handle empty schema or other unexpected formats
+        logger.warning(f"Schema for {scope}/{template_key} is empty or not in expected dict format: {schema_details}")
+        return [] # Return empty list if schema is empty but valid, or handle as error if appropriate
 
 def process_files_with_progress(files_to_process: List[Dict[str, Any]], extraction_functions: Dict[str, Any], batch_size: int, processing_mode: str):
     """
@@ -138,12 +160,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     logger.error(err_msg)
                     st.session_state.processing_state['errors'][file_id] = err_msg
                 else:
-                    st.session_state.extraction_results[file_id] = {
-                        "ai_response": extracted_metadata,
-                        "template_id_used_for_extraction": target_template_id if extraction_method == "structured" else "global_properties"
-                    }
-                    st.session_state.processing_state["results"][file_id] = extracted_metadata # Keep this for immediate UI, but application will use the above structure
-                    logger.info(f'Successfully extracted metadata for {file_name} (ID: {file_id})') # Avoid logging potentially large metadata here
+                    logger.info(f'Successfully extracted and validated metadata for {file_name} (ID: {file_id})')
             elif file_id not in st.session_state.processing_state['errors']:
                 st.session_state.processing_state['errors'][file_id] = 'Extraction returned no data and no specific error.'
                 logger.warning(f'Extraction returned no data for {file_name} (ID: {file_id}).')
