@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Union # Added Union
 import json
 import logging
 
@@ -69,140 +69,133 @@ def view_results():
         st.session_state.confidence_filter_selection = ['High', 'Medium', 'Low']
     #endregion
 
-    st.subheader('Filter Results')
-    col1_filter, col2_filter = st.columns(2)
-    with col1_filter:
+    #region New Filters for Adjusted Confidence and Validation Status
+    if not hasattr(st.session_state, 'adjusted_confidence_filter_selection'):
+        st.session_state.adjusted_confidence_filter_selection = ['High', 'Medium', 'Low']
+    if not hasattr(st.session_state, 'validation_status_filter_selection'):
+        st.session_state.validation_status_filter_selection = ['Pass', 'Fail', 'Error', 'Skipped'] # Added Skipped for rules not run
+    #endregion
+
+    st.subheader("Filter Results")
+    row1_filter_col1, row1_filter_col2 = st.columns(2)
+    with row1_filter_col1:
         st.session_state.results_filter_text = st.text_input('Filter by file name', value=st.session_state.results_filter_text, key='filter_text_input_vr')
-    with col2_filter:
-        st.session_state.confidence_filter_selection = st.multiselect('Filter by Confidence Level', options=['High', 'Medium', 'Low'], default=st.session_state.confidence_filter_selection, key='confidence_filter_multiselect_vr')
+    with row1_filter_col2:
+        st.session_state.confidence_filter_selection = st.multiselect('Filter by AI Confidence', options=['High', 'Medium', 'Low'], default=st.session_state.confidence_filter_selection, key='ai_confidence_filter_multiselect_vr')
+
+    row2_filter_col1, row2_filter_col2 = st.columns(2)
+    with row2_filter_col1:
+        st.session_state.adjusted_confidence_filter_selection = st.multiselect('Filter by Adjusted Confidence', options=['High', 'Medium', 'Low'], default=st.session_state.adjusted_confidence_filter_selection, key='adj_confidence_filter_multiselect_vr')
+    with row2_filter_col2:
+        st.session_state.validation_status_filter_selection = st.multiselect('Filter by Field Validation Status', options=['pass', 'fail', 'error', 'skip'], default=['pass', 'fail', 'error', 'skip'], key='validation_status_filter_multiselect_vr') # Default to all
 
     processed_and_filtered_results = {}
-    for file_id, result_wrapper in st.session_state.extraction_results.items():
-        processed_result_for_file = {
-            'file_id': file_id, 
-            'file_name': 'Unknown', 
-            'result_data': {}, 
-            'confidence_levels': {}
-        }
+    # The st.session_state.extraction_results structure is now assumed to be:
+    # file_id: {
+    #     "file_name": str,
+    #     "document_type": str,
+    #     "template_id_used_for_extraction": str,
+    #     "fields": {
+    #         field_key: {
+    #             "value": any,
+    #             "ai_confidence": str, # Original from Box AI
+    #             "validations": list_of_validation_details, # From validation_engine
+    #             "field_validation_status": str, # Overall for this field (pass/fail/error)
+    #             "adjusted_confidence": str, # After validation
+    #             "is_mandatory": bool,
+    #             "is_present": bool
+    #         }
+    #     },
+    #     "document_validation_summary": { # From validation_engine
+    #         "mandatory_fields_status": str,
+    #         "missing_mandatory_fields": list_of_str,
+    #         "cross_field_status": str,
+    #         "cross_field_results": list_of_cross_field_validation_details,
+    #         "overall_document_confidence_suggestion": str
+    #     },
+    #     "raw_ai_response": dict # The original full response from Box AI if needed
+    # }
 
-        # Get file name
-        if hasattr(st.session_state, 'selected_files') and st.session_state.selected_files:
-            for file_obj in st.session_state.selected_files:
-                if str(file_obj.get('id')) == str(file_id):
-                    processed_result_for_file['file_name'] = file_obj.get('name', 'Unknown')
-                    break
-        
-        # Unpack the ai_response from the wrapper
-        actual_ai_response = None
-        if isinstance(result_wrapper, dict) and "ai_response" in result_wrapper:
-            actual_ai_response = result_wrapper["ai_response"]
-            # We don't need template_id_used_for_extraction for display here, but it's in result_wrapper
-        else:
-            logger.warning(f"File ID {file_id}: Item in extraction_results is not the expected wrapper or 'ai_response' is missing. Item: {result_wrapper}")
-            actual_ai_response = result_wrapper # Fallback to treat the whole item as the AI response (e.g., if old format)
+    for file_id, result_data_for_file in st.session_state.extraction_results.items():
+        if not isinstance(result_data_for_file, dict): # Skip if data is not in expected format
+            logger.warning(f"Skipping file_id {file_id} in results_viewer due to unexpected data format: {type(result_data_for_file)}")
+            continue
 
-        logger.info(f'VIEW_RESULTS: Processing AI response for file_id {file_id}: {(json.dumps(actual_ai_response) if isinstance(actual_ai_response, dict) else str(actual_ai_response))}')
-
-        # --- Start of existing parsing logic, now operating on actual_ai_response ---
-        if isinstance(actual_ai_response, dict):
-            processed_result_for_file['original_data'] = actual_ai_response # Store the AI's direct response
-
-            # Try to parse common AI response structures
-            if 'answer' in actual_ai_response:
-                answer_content = actual_ai_response['answer']
-                if isinstance(answer_content, str):
-                    try: answer_content = json.loads(answer_content)
-                    except json.JSONDecodeError: pass # Keep as string if not JSON
-                
-                if isinstance(answer_content, dict):
-                    for key, value_obj in answer_content.items():
-                        if isinstance(value_obj, dict) and 'value' in value_obj:
-                            processed_result_for_file['result_data'][key] = value_obj['value']
-                            processed_result_for_file['confidence_levels'][key] = value_obj.get('confidence', 'Medium')
-                        else:
-                            processed_result_for_file['result_data'][key] = value_obj
-                            processed_result_for_file['confidence_levels'][key] = 'Medium'
-                else: # Answer is a string or other non-dict type
-                    processed_result_for_file['result_data']['extracted_text'] = str(answer_content)
-                    processed_result_for_file['confidence_levels']['extracted_text'] = 'Medium'
-            
-            elif 'items' in actual_ai_response and isinstance(actual_ai_response['items'], list) and actual_ai_response['items']:
-                # Handle cases where response is wrapped in 'items' (e.g. some Box AI skill responses)
-                item_answer = actual_ai_response['items'][0].get('answer') # Assuming first item's answer
-                if item_answer:
-                    if isinstance(item_answer, str):
-                        try: item_answer = json.loads(item_answer)
-                        except json.JSONDecodeError: pass
-                    if isinstance(item_answer, dict):
-                         for key, value_obj in item_answer.items():
-                            if isinstance(value_obj, dict) and 'value' in value_obj:
-                                processed_result_for_file['result_data'][key] = value_obj['value']
-                                processed_result_for_file['confidence_levels'][key] = value_obj.get('confidence', 'Medium')
-                            else:
-                                processed_result_for_file['result_data'][key] = value_obj
-                                processed_result_for_file['confidence_levels'][key] = 'Medium'
-                    else:
-                        processed_result_for_file['result_data']['extracted_item_text'] = str(item_answer)
-                        processed_result_for_file['confidence_levels']['extracted_item_text'] = 'Medium'
-            
-            elif any((key.endswith('_confidence') for key in actual_ai_response.keys())):
-                # Handle flat structure with explicit _confidence fields
-                for key, value in actual_ai_response.items():
-                    if key.endswith('_confidence'):
-                        base_key = key[:-len('_confidence')]
-                        if base_key in actual_ai_response: # Ensure the base key exists
-                            processed_result_for_file['result_data'][base_key] = actual_ai_response[base_key]
-                            processed_result_for_file['confidence_levels'][base_key] = value
-                    elif not any(key == k[:-len('_confidence')] for k in actual_ai_response if k.endswith('_confidence')):
-                         # Add fields that don't have a corresponding _confidence field
-                        if key not in ['ai_agent_info', 'created_at', 'completion_reason']:
-                            processed_result_for_file['result_data'][key] = value
-                            processed_result_for_file['confidence_levels'][key] = 'Medium' # Default confidence
-            
-            # Fallback if no specific structure matched but it's a dict
-            if not processed_result_for_file['result_data']:
-                logger.info(f"File ID {file_id}: AI response was a dict, but no known structure parsed. Using its keys directly.")
-                for key, value in actual_ai_response.items():
-                    if key not in ['ai_agent_info', 'created_at', 'completion_reason', 'answer', 'items'] and not key.endswith('_confidence'):
-                        processed_result_for_file['result_data'][key] = value
-                        processed_result_for_file['confidence_levels'][key] = actual_ai_response.get(f"{key}_confidence", 'Medium')
-        
-        else: # actual_ai_response is not a dict (e.g., a string from a simple AI text_gen)
-            logger.warning(f'File ID {file_id}: AI response is not a dictionary: {type(actual_ai_response)}. Displaying as raw text.')
-            processed_result_for_file['result_data']['extracted_text'] = str(actual_ai_response)
-            processed_result_for_file['confidence_levels']['extracted_text'] = 'Medium'
-        # --- End of existing parsing logic ---
+        file_name = result_data_for_file.get('file_name', 'Unknown')
+        fields_data = result_data_for_file.get('fields', {})
 
         # Apply filters
-        name_match = st.session_state.results_filter_text.lower() in processed_result_for_file['file_name'].lower()
-        confidence_match = False
-        if not st.session_state.confidence_filter_selection: # If no confidence filter, it's a match
-            confidence_match = True
+        name_match = st.session_state.results_filter_text.lower() in file_name.lower()
+        
+        ai_confidence_match = False
+        if not st.session_state.confidence_filter_selection:
+            ai_confidence_match = True
         else:
-            for conf_level in processed_result_for_file['confidence_levels'].values():
-                if conf_level in st.session_state.confidence_filter_selection:
-                    confidence_match = True
+            for field_detail in fields_data.values():
+                if field_detail.get('ai_confidence') in st.session_state.confidence_filter_selection:
+                    ai_confidence_match = True
                     break
         
-        if name_match and confidence_match:
-            processed_and_filtered_results[file_id] = processed_result_for_file
+        adj_confidence_match = False
+        if not st.session_state.adjusted_confidence_filter_selection:
+            adj_confidence_match = True
+        else:
+            for field_detail in fields_data.values():
+                if field_detail.get('adjusted_confidence') in st.session_state.adjusted_confidence_filter_selection:
+                    adj_confidence_match = True
+                    break
+
+        validation_status_match = False
+        if not st.session_state.validation_status_filter_selection:
+            validation_status_match = True
+        else:
+            for field_detail in fields_data.values():
+                if field_detail.get('field_validation_status') in st.session_state.validation_status_filter_selection:
+                    validation_status_match = True
+                    break
+        
+        if name_match and ai_confidence_match and adj_confidence_match and validation_status_match:
+            processed_and_filtered_results[file_id] = result_data_for_file
 
     # Prepare data for DataFrame
     table_data_for_df = []
     for file_id, data_item in processed_and_filtered_results.items():
-        row = {'File Name': data_item['file_name'], 'File ID': file_id}
-        for key, value in data_item['result_data'].items():
-            row[key] = value
-            row[f'{key} Confidence'] = data_item['confidence_levels'].get(key, 'N/A')
+        row = {'File Name': data_item.get('file_name', 'Unknown'), 'File ID': file_id}
+        doc_summary = data_item.get('document_validation_summary', {})
+        row['Overall Doc Status'] = doc_summary.get('overall_document_confidence_suggestion', 'N/A') # Example of doc level info
+        row['Mandatory Fields'] = doc_summary.get('mandatory_fields_status', 'N/A')
+        row['Cross-field Valid.'] = doc_summary.get('cross_field_status', 'N/A')
+
+        fields_in_item = data_item.get('fields', {})
+        for key, field_details in fields_in_item.items():
+            row[key] = field_details.get('value', '')
+            row[f'{key} AI Conf.'] = field_details.get('ai_confidence', 'N/A')
+            row[f'{key} Valid. Status'] = field_details.get('field_validation_status', 'N/A')
+            row[f'{key} Adj. Conf.'] = field_details.get('adjusted_confidence', 'N/A')
         table_data_for_df.append(row)
     
     df_results = pd.DataFrame(table_data_for_df)
 
     if not df_results.empty:
-        base_cols = ['File Name', 'File ID']
-        field_cols_sorted = sorted([col for col in df_results.columns if col not in base_cols and not col.endswith(' Confidence')])
-        final_ordered_cols = base_cols + [item for field in field_cols_sorted for item in (field, f'{field} Confidence') if item in df_results.columns]
-        df_results = df_results[final_ordered_cols]
+        base_cols = ['File Name', 'File ID', 'Overall Doc Status', 'Mandatory Fields', 'Cross-field Valid.']
+        
+        # Dynamically get field names from the first data item if possible, to create sorted field columns
+        field_cols_sorted = []
+        if processed_and_filtered_results:
+            first_item_fields = list(list(processed_and_filtered_results.values())[0].get('fields', {}).keys())
+            field_cols_sorted = sorted(first_item_fields)
+        
+        # Construct the final column order
+        final_ordered_cols = base_cols[:]
+        for field_name_key in field_cols_sorted:
+            final_ordered_cols.append(field_name_key) # Value
+            final_ordered_cols.append(f'{field_name_key} AI Conf.')
+            final_ordered_cols.append(f'{field_name_key} Valid. Status')
+            final_ordered_cols.append(f'{field_name_key} Adj. Conf.')
+        
+        # Filter df_results to only include columns that actually exist to prevent KeyError
+        existing_cols_in_df = [col for col in final_ordered_cols if col in df_results.columns]
+        df_results = df_results[existing_cols_in_df]
 
     st.subheader('Extraction Results')
     tab_table, tab_detailed = st.tabs(['Table View', 'Detailed View'])
@@ -210,9 +203,25 @@ def view_results():
     with tab_table:
         st.write(f'Showing {len(df_results)} of {len(st.session_state.extraction_results)} results based on filters.')
         if not df_results.empty:
+            # Define a function for styling
+            def style_confidence_and_status(val):
+                color = 'black' # Default color
+                if isinstance(val, str):
+                    if val in ['High', 'Medium', 'Low']:
+                        color = get_confidence_color(val)
+                    elif val == 'pass':
+                        color = 'green'
+                    elif val == 'fail':
+                        color = 'red'
+                    elif val == 'error':
+                        color = 'purple' # Or some other distinct color for error
+                    elif val == 'skip':
+                        color = 'grey'
+                return f'color: {color}'
+
             st.dataframe(df_results.style.applymap(
-                lambda x: f'color: {get_confidence_color(x)}', 
-                subset=[col for col in df_results.columns if col.endswith(' Confidence')]
+                style_confidence_and_status, 
+                subset=[col for col in df_results.columns if col.endswith(' AI Conf.') or col.endswith(' Adj. Conf.') or col.endswith(' Valid. Status') or col in ['Overall Doc Status', 'Mandatory Fields', 'Cross-field Valid.']]
             ), use_container_width=True, hide_index=True)
             
             # Export buttons (functionality not fully implemented here)
@@ -231,7 +240,7 @@ def view_results():
             st.info('No results to display based on current filters.')
         else:
             detailed_view_file_options = {
-                result_item['file_name']: file_id 
+                result_item.get('file_name', 'Unknown File'): file_id 
                 for file_id, result_item in processed_and_filtered_results.items()
             }
             selected_file_name_for_detail = st.selectbox(
@@ -243,17 +252,49 @@ def view_results():
             if selected_file_name_for_detail:
                 selected_file_id_for_detail = detailed_view_file_options[selected_file_name_for_detail]
                 detailed_data = processed_and_filtered_results[selected_file_id_for_detail]
-                st.write(f"**File Name:** {detailed_data['file_name']}")
-                st.write(f"**File ID:** {detailed_data['file_id']}")
-                st.write("**Extracted Metadata:**")
-                for key, value in detailed_data['result_data'].items():
-                    confidence = detailed_data['confidence_levels'].get(key, 'N/A')
-                    st.text_input(f"{key} (Confidence: {confidence})", value=str(value), key=f'detail_{selected_file_id_for_detail}_{key}', disabled=True)
+                
+                st.write(f"**File Name:** {detailed_data.get('file_name', 'N/A')}")
+                st.write(f"**File ID:** {selected_file_id_for_detail}")
+                st.write(f"**Document Type:** {detailed_data.get('document_type', 'N/A')}")
+                
+                doc_summary = detailed_data.get('document_validation_summary', {})
+                st.markdown(f"**Overall Document Suggested Confidence:** <span style='color:{get_confidence_color(doc_summary.get('overall_document_confidence_suggestion', 'N/A'))};'>{doc_summary.get('overall_document_confidence_suggestion', 'N/A')}</span>", unsafe_allow_html=True)
+                st.markdown(f"**Mandatory Fields Status:** <span style='color:{'green' if doc_summary.get('mandatory_fields_status') == 'pass' else 'red'};'>{doc_summary.get('mandatory_fields_status', 'N/A')}</span>", unsafe_allow_html=True)
+                if doc_summary.get('mandatory_fields_status') == 'fail':
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;*Missing*: {', '.join(doc_summary.get('missing_mandatory_fields', []))}")
+                st.markdown(f"**Cross-Field Validation Status:** <span style='color:{'green' if doc_summary.get('cross_field_status') == 'pass' else 'red'};'>{doc_summary.get('cross_field_status', 'N/A')}</span>", unsafe_allow_html=True)
+                if doc_summary.get('cross_field_status') == 'fail':
+                    with st.expander("Failed Cross-Field Rule Details"):
+                        for cross_val_res in doc_summary.get('cross_field_results', []):
+                            if cross_val_res.get('status') == 'fail':
+                                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;- Rule: **{cross_val_res.get('rule_name')}**: {cross_val_res.get('message')}")
+
+                st.write("**Extracted Metadata Fields:**")
+                fields_to_display = detailed_data.get('fields', {})
+                for key, field_info in fields_to_display.items():
+                    val = field_info.get('value', '')
+                    ai_conf = field_info.get('ai_confidence', 'N/A')
+                    adj_conf = field_info.get('adjusted_confidence', 'N/A')
+                    val_status = field_info.get('field_validation_status', 'N/A')
+                    
+                    # Display field value and confidences
+                    st.markdown(f"**{key}**: `{val}`")
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;AI Confidence: <span style='color:{get_confidence_color(ai_conf)};'>{ai_conf}</span> | Validation Status: <span style='color:{style_confidence_and_status(val_status).split(':')[1].strip()};'>{val_status}</span> | Adjusted Confidence: <span style='color:{get_confidence_color(adj_conf)};'>{adj_conf}</span>", unsafe_allow_html=True)
+                    
+                    # Display validation rule details for this field
+                    validations = field_info.get('validations', [])
+                    if validations:
+                        with st.expander(f"Validation Details for {key}", expanded=(val_status != 'pass')):
+                            for v_rule in validations:
+                                rule_msg = v_rule.get('message', 'No message')
+                                rule_status_color = 'green' if v_rule.get('status') == 'pass' else ('red' if v_rule.get('status') == 'fail' else 'purple')
+                                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- {v_rule.get('rule_type')}: <span style='color:{rule_status_color};'>{v_rule.get('status')}</span> - {rule_msg}", unsafe_allow_html=True)
                 
                 # Display raw AI response if available
-                if 'original_data' in detailed_data and detailed_data['original_data']:
+                raw_ai_resp = detailed_data.get('raw_ai_response')
+                if raw_ai_resp:
                     with st.expander("View Raw AI Response"):
-                        st.json(detailed_data['original_data'])
+                        st.json(raw_ai_resp)
 
     st.subheader('Batch Operations')
     col_select_all, col_deselect_all = st.columns(2)
