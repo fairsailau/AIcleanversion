@@ -54,15 +54,15 @@ def get_extraction_functions() -> Dict[str, Any]:
             # Corrected system_message strings to use proper quoting for JSON examples
             ai_agent = {
                 'type': 'ai_agent_extract_structured',
-                'long_text': {
+                'long_text': { 
                     'model': ai_model,
                     'mode': 'default',
-                    'system_message': 'You are an AI assistant specialized in extracting metadata from documents based on provided field definitions. For each field, analyze the document content and extract the corresponding value. CRITICALLY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1. "value": The extracted metadata value as a string. 2. "confidence": Your confidence level for this specific extraction, chosen from ONLY these three options: "High", "Medium", or "Low". Base your confidence on how certain you are about the extracted value given the document content and field definition. Example Response for a field: {"value": "INV-12345", "confidence": "High"}'
+                    'system_message': 'You are an AI assistant specialized in extracting metadata from documents based on provided field definitions. IMPORTANT: You MUST provide a response for EVERY field listed in the request, even if you need to return an empty value with low confidence. For each field, analyze the document content and extract the corresponding value. CRITICALLY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1. "value": The extracted metadata value as a string. 2. "confidence": Your confidence level for this specific extraction, chosen from ONLY these three options: "High", "Medium", or "Low". Base your confidence on how certain you are about the extracted value given the document content and field definition. Example Response for a complete set of fields: {"field1": {"value": "Value1", "confidence": "High"}, "field2": {"value": "", "confidence": "Low"}}'
                 },
                 'basic_text': {
                     'model': ai_model,
                     'mode': 'default',
-                    'system_message': 'You are an AI assistant specialized in extracting metadata from documents based on provided field definitions. For each field, analyze the document content and extract the corresponding value. CRITICALLY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1. "value": The extracted metadata value as a string. 2. "confidence": Your confidence level for this specific extraction, chosen from ONLY these three options: "High", "Medium", or "Low". Base your confidence on how certain you are about the extracted value given the document content and field definition. Example Response for a field: {"value": "INV-12345", "confidence": "High"}'
+                    'system_message': 'You are an AI assistant specialized in extracting metadata from documents based on provided field definitions. IMPORTANT: You MUST provide a response for EVERY field listed in the request, even if you need to return an empty value with low confidence. For each field, analyze the document content and extract the corresponding value. CRITICALLY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1. "value": The extracted metadata value as a string. 2. "confidence": Your confidence level for this specific extraction, chosen from ONLY these three options: "High", "Medium", or "Low". Base your confidence on how certain you are about the extracted value given the document content and field definition. Example Response for a complete set of fields: {"field1": {"value": "Value1", "confidence": "High"}, "field2": {"value": "", "confidence": "Low"}}'
                 }
             }
             items = [{'id': file_id, 'type': 'file'}]
@@ -184,6 +184,24 @@ def get_extraction_functions() -> Dict[str, Any]:
                             processed_response[field_key] = field_data
                             processed_response[f'{field_key}_confidence'] = 'Low'
 
+            # Check if we have all the requested fields and add empty values for missing ones
+            if fields:
+                field_keys = [field.get('key', field.get('name', '')) for field in fields if field.get('key') or field.get('name')]
+                
+                # Remove any empty strings that might have been introduced
+                field_keys = [key for key in field_keys if key]
+                
+                # Check which fields are missing from the processed response
+                missing_fields = [key for key in field_keys if key not in processed_response]
+                
+                if missing_fields:
+                    logger.warning(f"Box AI model did not extract {len(missing_fields)} fields. Adding placeholders: {missing_fields}")
+                    for field_key in missing_fields:
+                        processed_response[field_key] = ""
+                        processed_response[f'{field_key}_confidence'] = "Low"
+                        
+                logger.info(f"Final extraction contains {len(field_keys)} fields ({len(missing_fields)} were added as placeholders).")
+                
             elif 'answer' in response_data and isinstance(response_data['answer'], str):
                 logger.info("Processing 'answer' as string (potential freeform JSON).")
                 response_text = response_data['answer']
