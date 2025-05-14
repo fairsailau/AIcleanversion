@@ -27,10 +27,10 @@ def get_template_schema(client, full_scope, template_key):
         logger.info(f'Fetching template schema for {full_scope}/{template_key}')
         template = client.metadata_template(full_scope, template_key).get()
         if template and hasattr(template, 'fields') and template.fields:
-            schema_map = {field['key']: field['type'] for field in template.fields}
-            st.session_state.template_schema_cache[cache_key] = schema_map
-            logger.info(f'Successfully fetched and cached schema for {full_scope}/{template_key}')
-            return schema_map.copy() # Return a copy
+            schema_details = {field['key']: {'type': field['type'], 'displayName': field.get('displayName', field['key'].replace('_', ' ').title()), 'description': field.get('description', '')} for field in template.fields}
+            st.session_state.template_schema_cache[cache_key] = schema_details
+            logger.info(f'Successfully fetched and cached schema (with descriptions) for {full_scope}/{template_key}')
+            return schema_details.copy() # Return a copy
         else:
             logger.warning(f'Template {full_scope}/{template_key} found but has no fields or is invalid.')
             st.session_state.template_schema_cache[cache_key] = {}
@@ -193,11 +193,22 @@ def apply_metadata_to_file_direct_worker(client, file_id, file_name, raw_ai_resp
 
         metadata_to_apply_final = {}
         conversion_errors = []
-        for schema_key, field_type in template_schema.items():
+        for schema_key, field_details_dict in template_schema.items():
+            if not isinstance(field_details_dict, dict):
+                logger.warning(f"WORKER: Schema details for key '{schema_key}' is not a dictionary: {field_details_dict}. Skipping.")
+                conversion_errors.append(f"Schema details for key '{schema_key}' is not a dictionary.")
+                continue
+            
+            actual_field_type = field_details_dict.get('type')
+            if not actual_field_type:
+                logger.warning(f"WORKER: No 'type' found in schema details for key '{schema_key}': {field_details_dict}. Skipping.")
+                conversion_errors.append(f"No 'type' found in schema details for key '{schema_key}'.")
+                continue
+
             if schema_key in metadata_for_schema_matching:
                 value_from_ai = metadata_for_schema_matching[schema_key]
                 try:
-                    converted_value = convert_value_for_template(schema_key, value_from_ai, field_type)
+                    converted_value = convert_value_for_template(schema_key, value_from_ai, actual_field_type)
                     if converted_value is not None:
                         metadata_to_apply_final[schema_key] = converted_value
                     else:
