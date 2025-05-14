@@ -5,6 +5,7 @@ import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple
 import json
 import concurrent.futures
+import matplotlib.pyplot as plt  # Add matplotlib import for visualizations
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 from .metadata_extraction import get_extraction_functions
@@ -455,6 +456,10 @@ def process_files():
             total_files_count = current_processing_state.get('total_files', 0)
             successful_extractions_count = len(current_processing_state.get('results', {}))
             extraction_error_count = len(current_processing_state.get('errors', {}))
+            
+            # Check for API errors tracked in session state
+            api_errors = st.session_state.get('api_errors', [])
+            api_error_count = len(api_errors)
 
             if total_files_count > 0:
                 if successful_extractions_count == total_files_count and extraction_error_count == 0:
@@ -480,6 +485,80 @@ def process_files():
                             st.table(pd.DataFrame(error_data))
                         else:
                             st.write("No extraction errors recorded.")
+            
+                # Show API errors and offer retry capability
+                if api_error_count > 0:
+                    with st.expander("Box API Errors", expanded=True if api_error_count > 0 else False):
+                        st.write(f"Found {api_error_count} errors from Box API calls that might be intermittent.")
+                        
+                        # Show the errors in a table
+                        error_df_data = []
+                        for i, error in enumerate(api_errors):
+                            # Find file name from file_id
+                            file_name = "Unknown File"
+                            file_id = error.get('file_id')
+                            for f_info in st.session_state.selected_files:
+                                if str(f_info.get('id')) == str(file_id):
+                                    file_name = f_info.get('name', f'File ID {file_id}')
+                                    break
+                                    
+                            error_df_data.append({
+                                'Index': i,
+                                'File Name': file_name,
+                                'API': error.get('api', 'Unknown'),
+                                'Error': error.get('error', 'Unknown error'),
+                                'Retries': error.get('retry_count', 0),
+                                'Time': time.strftime('%H:%M:%S', time.localtime(error.get('timestamp', 0)))
+                            })
+                            
+                        if error_df_data:
+                            st.dataframe(pd.DataFrame(error_df_data))
+                            
+                            # Offer retry button
+                            if st.button("Retry Failed API Calls", key="retry_api_errors_btn"):
+                                st.info("Retrying failed API calls...")
+                                # Clear the API errors list as we're going to retry them
+                                retry_errors = st.session_state.api_errors.copy()
+                                st.session_state.api_errors = []
+                                
+                                # Re-add the files to selected_files if they aren't there already
+                                file_ids_to_retry = [error.get('file_id') for error in retry_errors if 'file_id' in error]
+                                file_ids_current = [f.get('id') for f in st.session_state.selected_files]
+                                
+                                # Filter to only retry files that had API errors
+                                files_to_process = [f for f in st.session_state.selected_files if str(f.get('id')) in file_ids_to_retry]
+                                
+                                if files_to_process:
+                                    # Reset processing state for these files
+                                    batch_size = st.session_state.metadata_config.get('batch_size', 5)
+                                    processing_mode = st.session_state.processing_state.get('processing_mode', 'Sequential')
+                                    
+                                    # Clear previous errors for these files
+                                    for file_data in files_to_process:
+                                        file_id = str(file_data.get('id'))
+                                        if file_id in st.session_state.processing_state.get('errors', {}):
+                                            del st.session_state.processing_state['errors'][file_id]
+                                    
+                                    st.session_state.processing_state.update({
+                                        'is_processing': True,
+                                        'processed_files': 0,
+                                        'total_files': len(files_to_process),
+                                        'current_file_index': -1,
+                                        'current_file': ''
+                                    })
+                                    
+                                    # Process just the failed files
+                                    process_files_with_progress(
+                                        files_to_process,
+                                        get_extraction_functions(),
+                                        batch_size=batch_size,
+                                        processing_mode=processing_mode
+                                    )
+                                else:
+                                    st.warning("No files to retry. The files might have been removed from selection.")
+                                    
+                        else:
+                            st.write("No API error details available.")
             
             # Visualization of results (example)
             if successful_extractions_count > 0 or extraction_error_count > 0:
