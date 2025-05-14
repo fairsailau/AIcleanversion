@@ -69,7 +69,7 @@ class Validator:
                     is_valid = False
                     messages.append(message)
             elif rule_type == "maxLength" and isinstance(value, str):
-                if len(value) > params.get("limit", float(\'inf\')):
+                if len(value) > params.get("limit", float('inf')):
                     is_valid = False
                     messages.append(message)
             elif rule_type == "dataType":
