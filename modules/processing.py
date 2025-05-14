@@ -166,80 +166,133 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                         st.session_state.confidence_adjuster = ConfidenceAdjuster()
 
                     if extraction_method == 'structured':
-                        rules = st.session_state.rule_loader.get_rules_for_doc_type(current_doc_type)
-                        validation_output = st.session_state.validator.validate(extracted_metadata, rules, current_doc_type)
-                        confidence_output = st.session_state.confidence_adjuster.adjust_confidence(extracted_metadata, validation_output)
-                        overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
+                        try:
+                            rules = st.session_state.rule_loader.get_rules_for_doc_type(current_doc_type)
+                            validation_output = st.session_state.validator.validate(extracted_metadata, rules, current_doc_type)
+                            confidence_output = st.session_state.confidence_adjuster.adjust_confidence(extracted_metadata, validation_output)
+                            overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
 
-                        # --- Restructure results to match results_viewer.py expectations ---
-                        fields_for_ui = {}
-                        raw_ai_data = extracted_metadata if isinstance(extracted_metadata, dict) else {}
-                        for field_key, ai_field_data in raw_ai_data.items():
-                            value = None
-                            original_ai_confidence_score = 0.0 # Default
-                            original_ai_confidence_qualitative = "Low" # Default
+                            # --- Restructure results to match results_viewer.py expectations ---
+                            fields_for_ui = {}
+                            raw_ai_data = extracted_metadata if isinstance(extracted_metadata, dict) else {}
+                            for field_key, ai_field_data in raw_ai_data.items():
+                                value = None
+                                original_ai_confidence_score = 0.0 # Default
+                                original_ai_confidence_qualitative = "Low" # Default
 
-                            if isinstance(ai_field_data, dict):
-                                value = ai_field_data.get("value")
-                                original_ai_confidence_score = ai_field_data.get("confidenceScore", 0.0)
-                                if not isinstance(original_ai_confidence_score, (int, float)):
-                                    try: original_ai_confidence_score = float(original_ai_confidence_score)
-                                    except: original_ai_confidence_score = 0.0
-                            elif isinstance(ai_field_data, (str, int, float, bool)):
-                                value = ai_field_data
-                                original_ai_confidence_score = 0.5 # Assign a neutral default for primitives
-                            
-                            original_ai_confidence_qualitative = st.session_state.confidence_adjuster._get_qualitative_confidence(original_ai_confidence_score)
+                                if isinstance(ai_field_data, dict):
+                                    value = ai_field_data.get("value")
+                                    original_ai_confidence_score = ai_field_data.get("confidenceScore", 0.0)
+                                    if not isinstance(original_ai_confidence_score, (int, float)):
+                                        try: original_ai_confidence_score = float(original_ai_confidence_score)
+                                        except: original_ai_confidence_score = 0.0
+                                elif isinstance(ai_field_data, (str, int, float, bool)):
+                                    value = ai_field_data
+                                    original_ai_confidence_score = 0.5 # Assign a neutral default for primitives
+                                
+                                original_ai_confidence_qualitative = st.session_state.confidence_adjuster._get_qualitative_confidence(original_ai_confidence_score)
 
-                            field_validation_details = validation_output.get("field_validations", {}).get(field_key, {"is_valid": True, "messages": []})
-                            field_adjusted_confidence_details = confidence_output.get(field_key, {
-                                "adjusted_qualitative": original_ai_confidence_qualitative, # Fallback
-                                "validation_messages": field_validation_details.get("messages", [])
-                            })
+                                field_validation_details = validation_output.get("field_validations", {}).get(field_key, {"is_valid": True, "messages": []})
+                                field_adjusted_confidence_details = confidence_output.get(field_key, {
+                                    "adjusted_qualitative": original_ai_confidence_qualitative, # Fallback
+                                    "validation_messages": field_validation_details.get("messages", [])
+                                })
 
-                            fields_for_ui[field_key] = {
-                                "value": value,
-                                "ai_confidence": original_ai_confidence_qualitative,
-                                "validations": field_validation_details.get("messages", []),
-                                "field_validation_status": "pass" if field_validation_details.get("is_valid") else "fail",
-                                "adjusted_confidence": field_adjusted_confidence_details.get("adjusted_qualitative"),
-                                "is_mandatory": field_key in rules.get("mandatory_fields", []),
-                                "is_present": value is not None and str(value).strip() != ""
+                                fields_for_ui[field_key] = {
+                                    "value": value,
+                                    "ai_confidence": original_ai_confidence_qualitative,
+                                    "validations": field_validation_details.get("messages", []),
+                                    "field_validation_status": "pass" if field_validation_details.get("is_valid") else "fail",
+                                    "adjusted_confidence": field_adjusted_confidence_details.get("adjusted_qualitative"),
+                                    "is_mandatory": field_key in rules.get("mandatory_fields", []),
+                                    "is_present": value is not None and str(value).strip() != ""
+                                }
+
+                            document_summary_for_ui = {
+                                "mandatory_fields_status": validation_output.get("mandatory_check", {}).get("status", "N/A"),
+                                "missing_mandatory_fields": validation_output.get("mandatory_check", {}).get("missing_fields", []),
+                                "cross_field_status": validation_output.get("cross_field_check", {}).get("status", "N/A"),
+                                "cross_field_results": validation_output.get("cross_field_check", {}).get("failed_rules", []),
+                                "overall_document_confidence_suggestion": overall_status_info.get("status", "N/A")
                             }
 
-                        document_summary_for_ui = {
-                            "mandatory_fields_status": validation_output.get("mandatory_check", {}).get("status", "N/A"),
-                            "missing_mandatory_fields": validation_output.get("mandatory_check", {}).get("missing_fields", []),
-                            "cross_field_status": validation_output.get("cross_field_check", {}).get("status", "N/A"),
-                            "cross_field_results": validation_output.get("cross_field_check", {}).get("failed_rules", []),
-                            "overall_document_confidence_suggestion": overall_status_info.get("status", "N/A")
-                        }
-
-                        st.session_state.extraction_results[file_id] = {
-                            "file_name": file_name,
-                            "document_type": current_doc_type,
-                            "template_id_used_for_extraction": target_template_id if extraction_method == "structured" else "N/A_Freeform",
-                            "fields": fields_for_ui,
-                            "document_validation_summary": document_summary_for_ui,
-                            "raw_ai_response": extracted_metadata # Keep the original raw response as well
-                        }
-                        logger.info(f'Successfully EXTRACTED, VALIDATED, and STORED structured metadata for {file_name} (ID: {file_id}) in UI-compatible format.')
+                            # Save both in extraction_results and processing_state.results
+                            result_data = {
+                                "file_name": file_name,
+                                "document_type": current_doc_type,
+                                "template_id_used_for_extraction": target_template_id if extraction_method == "structured" else "N/A_Freeform",
+                                "fields": fields_for_ui,
+                                "document_validation_summary": document_summary_for_ui,
+                                "raw_ai_response": extracted_metadata # Keep the original raw response as well
+                            }
+                            st.session_state.extraction_results[file_id] = result_data
+                            st.session_state.processing_state['results'][file_id] = result_data
+                            
+                            logger.info(f'Successfully EXTRACTED, VALIDATED, and STORED structured metadata for {file_name} (ID: {file_id}) in UI-compatible format.')
+                        except Exception as e:
+                            logger.error(f'Error during validation/confidence processing for {file_name}: {str(e)}', exc_info=True)
+                            # Fallback to simpler storage in case of validation error
+                            fields_for_ui_simple = {}
+                            for field_key, value in extracted_metadata.items():
+                                if isinstance(value, dict) and "value" in value:
+                                    fields_for_ui_simple[field_key] = {
+                                        "value": value.get("value"),
+                                        "ai_confidence": "Medium",  # Default
+                                        "validations": [],
+                                        "field_validation_status": "skip",
+                                        "adjusted_confidence": "Medium",
+                                        "is_mandatory": False,
+                                        "is_present": True
+                                    }
+                                else:
+                                    fields_for_ui_simple[field_key] = {
+                                        "value": value,
+                                        "ai_confidence": "Medium",  # Default
+                                        "validations": [],
+                                        "field_validation_status": "skip",
+                                        "adjusted_confidence": "Medium",
+                                        "is_mandatory": False,
+                                        "is_present": True
+                                    }
+                            
+                            result_data = {
+                                "file_name": file_name,
+                                "document_type": current_doc_type,
+                                "template_id_used_for_extraction": target_template_id,
+                                "fields": fields_for_ui_simple,
+                                "document_validation_summary": {
+                                    "mandatory_fields_status": "N/A",
+                                    "missing_mandatory_fields": [],
+                                    "cross_field_status": "N/A",
+                                    "cross_field_results": [],
+                                    "overall_document_confidence_suggestion": "Medium"
+                                },
+                                "raw_ai_response": extracted_metadata
+                            }
+                            st.session_state.extraction_results[file_id] = result_data
+                            st.session_state.processing_state['results'][file_id] = result_data
+                            
+                            logger.warning(f'Used simplified storage for {file_name} due to validation error: {str(e)}')
                     elif extraction_method == 'freeform':
                         # For freeform, adapt the structure similarly but with less validation detail
                         fields_for_ui_freeform = {}
                         raw_ai_data_freeform = extracted_metadata if isinstance(extracted_metadata, dict) else {}
                         for field_key, value in raw_ai_data_freeform.items(): # Assuming freeform is simpler key:value
+                            # Skip system fields that shouldn't be shown as extractable data
+                            if field_key in ['ai_agent_info', 'created_at', 'completion_reason', 'answer']:
+                                continue
+                                
                             fields_for_ui_freeform[field_key] = {
                                 "value": value,
-                                "ai_confidence": "N/A", # AI confidence not typically provided per field in freeform by Box AI
+                                "ai_confidence": "Medium", # Default for freeform data
                                 "validations": [],
-                                "field_validation_status": "N/A",
-                                "adjusted_confidence": "N/A",
+                                "field_validation_status": "skip",
+                                "adjusted_confidence": "Medium",
                                 "is_mandatory": False,
                                 "is_present": value is not None and str(value).strip() != ""
                             }
 
-                        st.session_state.extraction_results[file_id] = {
+                        result_data = {
                             "file_name": file_name,
                             "document_type": current_doc_type,
                             "template_id_used_for_extraction": "N/A_Freeform",
@@ -249,10 +302,13 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                                 "missing_mandatory_fields": [],
                                 "cross_field_status": "N/A",
                                 "cross_field_results": [],
-                                "overall_document_confidence_suggestion": "N/A"
+                                "overall_document_confidence_suggestion": "Medium"
                             },
                             "raw_ai_response": extracted_metadata
                         }
+                        st.session_state.extraction_results[file_id] = result_data
+                        st.session_state.processing_state['results'][file_id] = result_data
+                        
                         logger.info(f'Successfully EXTRACTED and STORED freeform metadata for {file_name} (ID: {file_id}) in UI-compatible format.')
             elif file_id not in st.session_state.processing_state['errors']:
                 st.session_state.processing_state['errors'][file_id] = 'Extraction returned no data and no specific error.'
