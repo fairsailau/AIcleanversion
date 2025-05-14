@@ -17,7 +17,7 @@ class ValidationRuleLoader:
             with open(self.rules_config_path, 'r') as f:
                 config = json.load(f)
                 logger.info(f"Successfully loaded validation rules from {self.rules_config_path}")
-                return {doc_type[\"name\"]: doc_type for doc_type in config.get(\"document_types\", [])}
+                return {doc_type["name"]: doc_type for doc_type in config.get("document_types", [])}
         except FileNotFoundError:
             logger.error(f"Validation rules file not found at {self.rules_config_path}. Using empty ruleset.")
             return {}
