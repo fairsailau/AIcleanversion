@@ -1,0 +1,10 @@
+{
+  "document_types": [
+    {
+      "name": "Default",
+      "fields": [],
+      "mandatory_fields": [],
+      "cross_field_rules": []
+    }
+  ]
+}
