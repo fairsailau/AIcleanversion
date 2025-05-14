@@ -1,315 +1,260 @@
 # modules/validation_engine.py
 import json
 import re
-from datetime import datetime, timedelta
 import logging
+from datetime import datetime
+from typing import Dict, List, Any, Optional, Tuple
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class ValidationRuleLoader:
-    def __init__(self, rules_filepath="/home/ubuntu/AIcleanversion/config/validation_rules.json"):
-        self.rules_filepath = rules_filepath
+    def __init__(self, rules_config_path: str):
+        self.rules_config_path = rules_config_path
         self.rules = self._load_rules()
 
-    def _load_rules(self):
+    def _load_rules(self) -> Dict[str, Any]:
         try:
-            with open(self.rules_filepath, 'r') as f:
-                rules_data = json.load(f)
-                logger.info(f"Successfully loaded validation rules from {self.rules_filepath}")
-                return rules_data.get("document_types", [])
+            with open(self.rules_config_path, 'r') as f:
+                config = json.load(f)
+                logger.info(f"Successfully loaded validation rules from {self.rules_config_path}")
+                return {doc_type[\"name\"]: doc_type for doc_type in config.get(\"document_types\", [])}
         except FileNotFoundError:
-            logger.error(f"Validation rules file not found at {self.rules_filepath}. Returning empty rules.")
-            return []
-        except json.JSONDecodeError as e:
-            logger.error(f"Error decoding JSON from {self.rules_filepath}: {e}. Returning empty rules.")
-            return []
+            logger.error(f"Validation rules file not found at {self.rules_config_path}. Using empty ruleset.")
+            return {}
+        except json.JSONDecodeError:
+            logger.error(f"Error decoding JSON from {self.rules_config_path}. Using empty ruleset.")
+            return {}
         except Exception as e:
-            logger.error(f"An unexpected error occurred while loading validation rules: {e}. Returning empty rules.")
-            return []
+            logger.error(f"An unexpected error occurred while loading validation rules: {e}. Using empty ruleset.")
+            return {}
 
-    def get_rules_for_document_type(self, doc_type_name):
-        for doc_type_rules in self.rules:
-            if doc_type_rules.get("name") == doc_type_name:
-                return doc_type_rules
-        logger.warning(f"No validation rules found for document type: {doc_type_name}")
-        return None
+    def get_rules_for_doc_type(self, doc_type_name: Optional[str]) -> Dict[str, Any]:
+        if not doc_type_name:
+            doc_type_name = "Default" # Fallback to default if no doc_type specified
+        
+        specific_rules = self.rules.get(doc_type_name)
+        if specific_rules:
+            logger.debug(f"Found specific rules for document type: {doc_type_name}")
+            return specific_rules
+        
+        default_rules = self.rules.get("Default")
+        if default_rules:
+            logger.debug(f"No specific rules for {doc_type_name}, using 'Default' rules.")
+            return default_rules
+            
+        logger.warning(f"No validation rules found for document type \'{doc_type_name}\' or \'Default\'. Returning empty rules.")
+        return {"fields": [], "mandatory_fields": [], "cross_field_rules": []}
 
 class Validator:
-    def __init__(self, rules_for_doc_type):
-        self.rules_for_doc_type = rules_for_doc_type if rules_for_doc_type else {"fields": [], "cross_field_rules": []}
-        self.field_rules_map = {field_rule["field_name"]: field_rule for field_rule in self.rules_for_doc_type.get("fields", [])}
+    def __init__(self):
+        pass
 
-    def validate_field(self, field_name, value):
-        """Applies all validation rules for a specific field and returns validation results."""
-        validation_results = []
-        field_specific_rules_config = self.field_rules_map.get(field_name)
+    def _validate_field(self, field_key: str, value: Any, rules: List[Dict[str, Any]]) -> Tuple[bool, List[str]]:
+        is_valid = True
+        messages = []
+        if value is None or value == "":
+            return True, [] 
+
+        for rule_detail in rules:
+            rule_type = rule_detail.get("type")
+            params = rule_detail.get("params", {})
+            message = rule_detail.get("message", f"Validation failed for {rule_type}")
+
+            if rule_type == "regex" and isinstance(value, str):
+                if not re.match(params.get("pattern", ""), value):
+                    is_valid = False
+                    messages.append(message)
+            elif rule_type == "minLength" and isinstance(value, str):
+                if len(value) < params.get("limit", 0):
+                    is_valid = False
+                    messages.append(message)
+            elif rule_type == "maxLength" and isinstance(value, str):
+                if len(value) > params.get("limit", float(\'inf\')):
+                    is_valid = False
+                    messages.append(message)
+            elif rule_type == "dataType":
+                expected_type = params.get("expected")
+                if expected_type == "integer":
+                    if not isinstance(value, int) and not (isinstance(value, str) and value.isdigit()):
+                        is_valid = False
+                        messages.append(message)
+                elif expected_type == "float":
+                    try:
+                        float(value)
+                    except (ValueError, TypeError):
+                        is_valid = False
+                        messages.append(message)
+                elif expected_type == "date":
+                    date_format = params.get("format", "%Y-%m-%d")
+                    try:
+                        datetime.strptime(str(value), date_format)
+                    except (ValueError, TypeError):
+                        is_valid = False
+                        messages.append(message)
+                elif expected_type == "boolean":
+                    if not isinstance(value, bool) and str(value).lower() not in [\'true\', \'false\', \'yes\', \'no\', \'1\', \'0\']:
+                        is_valid = False
+                        messages.append(message)
+            elif rule_type == "enum":
+                allowed_values = params.get("values", [])
+                if value not in allowed_values:
+                    is_valid = False
+                    messages.append(message)
+        return is_valid, messages
+
+    def _check_mandatory_fields(self, data: Dict[str, Any], mandatory_fields: List[str]) -> Tuple[bool, List[str]]:
+        missing = []
+        for field_key in mandatory_fields:
+            value = data.get(field_key, {}).get("value") 
+            if value is None or str(value).strip() == "":
+                missing.append(field_key)
+        return not missing, missing
         
-        if not field_specific_rules_config: # No rules defined for this field
-            return {"status": "pass", "details": [], "is_mandatory": False, "is_present": value is not None}
+    def _check_cross_field_rules(self, data: Dict[str, Any], cross_field_rules: List[Dict[str, Any]]) -> Tuple[bool, List[str]]:
+        all_passed = True
+        failed_rules_details = []
+        for rule in cross_field_rules:
+            rule_name = rule.get("name", "Unnamed Cross-field Rule")
+            if rule.get("type") == "dependent_existence":
+                dependent_field = rule.get("dependent_field")
+                trigger_field = rule.get("trigger_field")
+                trigger_value = rule.get("trigger_value")
+                trigger_field_data = data.get(trigger_field, {})
+                if trigger_field_data.get("value") == trigger_value:
+                    dependent_field_data = data.get(dependent_field, {})
+                    if dependent_field_data.get("value") is None or str(dependent_field_data.get("value")).strip() == "":
+                        all_passed = False
+                        failed_rules_details.append(f"{rule_name}: {dependent_field} must exist when {trigger_field} is {trigger_value}.")
+            elif rule.get("type") == "date_order":
+                date_a_key = rule.get("date_a_key")
+                date_b_key = rule.get("date_b_key")
+                date_format = rule.get("format", "%Y-%m-%d")
+                date_a_val = data.get(date_a_key, {}).get("value")
+                date_b_val = data.get(date_b_key, {}).get("value")
+                if date_a_val and date_b_val:
+                    try:
+                        date_a = datetime.strptime(str(date_a_val), date_format)
+                        date_b = datetime.strptime(str(date_b_val), date_format)
+                        if date_a >= date_b:
+                            all_passed = False
+                            failed_rules_details.append(f"{rule_name}: {date_a_key} ({date_a_val}) must be before {date_b_key} ({date_b_val}).")
+                    except ValueError:
+                        logger.warning(f"Could not compare dates for rule \'{rule_name}\' due to format issues.")
+        return all_passed, failed_rules_details
 
-        rules_to_apply = field_specific_rules_config.get("validation_rules", [])
-        is_mandatory = field_specific_rules_config.get("is_mandatory", False)
-        is_present = value is not None and str(value).strip() != ""
-
-        if is_mandatory and not is_present:
-            validation_results.append({
-                "rule_type": "mandatory_check",
-                "status": "fail",
-                "message": field_specific_rules_config.get("message_mandatory", f"{field_name} is mandatory but not present."),
-                "severity": field_specific_rules_config.get("severity_mandatory", "critical")
-            })
-            # If mandatory and not present, further value-based validations might not be meaningful or might fail misleadingly
-            overall_status = "fail"
-            return {"status": overall_status, "details": validation_results, "is_mandatory": is_mandatory, "is_present": is_present}
-
-        # If present or not mandatory, proceed with other rules
-        for rule in rules_to_apply:
-            rule_type = rule.get("type")
-            result = {"rule_type": rule_type, "status": "pass", "message": rule.get("message", "Validation passed."), "severity": rule.get("severity", "medium")}
-            
-            # Skip value-based validations if value is None/empty and field is not mandatory (or mandatory check already handled)
-            if not is_present and rule_type not in ["not_empty", "mandatory_check"]:
-                # For optional fields that are empty, most rules (regex, date_format etc.) pass by default or are not applicable
-                validation_results.append(result) # Assume pass for non-applicable rules on empty optional fields
-                continue
-
-            try:
-                if rule_type == "not_empty":
-                    if not is_present:
-                        result["status"] = "fail"
-                elif rule_type == "regex":
-                    if not re.match(rule["pattern"], str(value)):
-                        result["status"] = "fail"
-                elif rule_type == "date_format":
-                    datetime.strptime(str(value), rule["format"])
-                elif rule_type == "date_range":
-                    date_val = datetime.strptime(str(value), rule.get("format", "%Y-%m-%d")) # Assume a default format if not specified for range check
-                    now = datetime.now()
-                    if "max_days_past" in rule and (now - date_val).days > rule["max_days_past"]:
-                        result["status"] = "fail"
-                    if "max_days_future" in rule and (date_val - now).days > rule["max_days_future"]:
-                        result["status"] = "fail"
-                elif rule_type == "numeric":
-                    parsed_val = float(str(value).replace(",","")) # basic cleaning
-                    if rule.get("allow_negative") is False and parsed_val < 0:
-                        result["status"] = "fail"
-                elif rule_type == "min_value":
-                    if float(str(value).replace(",","")) < rule["value"]:
-                        result["status"] = "fail"
-                # Add more rule types here (e.g., length, allowed_values)
-                else:
-                    logger.warning(f"Unknown validation rule type: {rule_type} for field {field_name}")
-                    result["status"] = "error"
-                    result["message"] = f"Unknown rule type: {rule_type}"
-            except Exception as e:
-                logger.error(f"Error validating field {field_name} with rule {rule}: {e}")
-                result["status"] = "error"
-                result["message"] = f"Validation error: {str(e)}"
-            
-            validation_results.append(result)
-
-        overall_status = "pass"
-        for res in validation_results:
-            if res["status"] == "fail":
-                overall_status = "fail"
-                break
-            if res["status"] == "error": # If any rule execution had an error, mark overall as error
-                overall_status = "error"
-
-        return {"status": overall_status, "details": validation_results, "is_mandatory": is_mandatory, "is_present": is_present}
-
-    def check_mandatory_fields(self, all_extracted_data):
-        """Checks if all mandatory fields are present in the extracted data."""
-        missing_mandatory_fields = []
-        for field_config in self.rules_for_doc_type.get("fields", []):
-            field_name = field_config.get("field_name")
-            is_mandatory = field_config.get("is_mandatory", False)
-            # Check presence in the actual extracted data keys, and that value is not None or empty string
-            value = all_extracted_data.get(field_name)
-            is_present = value is not None and str(value).strip() != ""
-            if is_mandatory and not is_present:
-                missing_mandatory_fields.append(field_name)
-        
-        if not missing_mandatory_fields:
-            return {"status": "pass", "message": "All mandatory fields present."}
-        else:
-            return {"status": "fail", "message": f"Missing mandatory fields: {', '.join(missing_mandatory_fields)}", "missing_fields": missing_mandatory_fields}
-
-    def validate_cross_fields(self, all_extracted_data):
-        """Applies cross-field validation rules."""
-        cross_field_results = []
-        for rule in self.rules_for_doc_type.get("cross_field_rules", []):
-            rule_name = rule.get("name")
-            fields_involved = rule.get("fields_involved", [])
-            condition_str = rule.get("condition") # e.g., "DueDate > InvoiceDate"
-            message = rule.get("message", f"Cross-field rule '{rule_name}' failed.")
-            severity = rule.get("severity", "medium")
-            result = {"rule_name": rule_name, "status": "pass", "message": message, "severity": severity}
-
-            try:
-                # Basic condition parsing - This needs to be more robust for complex conditions
-                # For now, supports simple comparisons like FieldA > FieldB
-                if len(fields_involved) == 2 and ">" in condition_str: # Example
-                    field_a_name, field_b_name = fields_involved[0], fields_involved[1]
-                    # Ensure field names in condition match fields_involved for safety
-                    if field_a_name in condition_str and field_b_name in condition_str:
-                        val_a_str = all_extracted_data.get(field_a_name)
-                        val_b_str = all_extracted_data.get(field_b_name)
-
-                        if val_a_str is None or val_b_str is None:
-                            # If any field involved is missing, rule cannot be evaluated or should be considered a pass/skip
-                            result["status"] = "skip" # or 'pass' depending on desired logic for missing data
-                            result["message"] = f"Rule '{rule_name}' skipped, one or more fields missing: {field_a_name if val_a_str is None else ''} {field_b_name if val_b_str is None else ''}"
-                        else:
-                            # Attempt to convert to dates if they look like dates, otherwise string comparison
-                            try:
-                                # This is a very basic date conversion attempt, assumes YYYY-MM-DD or similar
-                                val_a = datetime.strptime(str(val_a_str), "%Y-%m-%d")
-                                val_b = datetime.strptime(str(val_b_str), "%Y-%m-%d")
-                                if not (val_a > val_b): # Condition: DueDate > InvoiceDate
-                                    result["status"] = "fail"
-                            except ValueError:
-                                # Fallback to string comparison or handle as error if types are incompatible
-                                if not (str(val_a_str) > str(val_b_str)):
-                                     result["status"] = "fail"
-                    else:
-                        result["status"] = "error"
-                        result["message"] = f"Condition string '{condition_str}' does not match fields_involved for rule '{rule_name}'."
-                else:
-                    logger.warning(f"Cross-field rule '{rule_name}' condition '{condition_str}' not supported by basic parser.")
-                    result["status"] = "skip" # Or error, depending on how strict this should be
-                    result["message"] = f"Rule '{rule_name}' condition not supported by basic parser."
-
-            except Exception as e:
-                logger.error(f"Error evaluating cross-field rule {rule_name}: {e}")
-                result["status"] = "error"
-                result["message"] = f"Error evaluating rule: {str(e)}"
-            cross_field_results.append(result)
-        return cross_field_results
+    def validate(self, ai_response: Dict[str, Any], doc_rules: Dict[str, Any], doc_type: Optional[str]) -> Dict[str, Any]:
+        field_validations = {}
+        if not isinstance(ai_response, dict):
+            logger.warning(f"AI response is not a dictionary for doc_type {doc_type}. Cannot perform validation.")
+            return {
+                "field_validations": {},
+                "mandatory_check": {"status": "Error", "message": "AI response not a dict"},
+                "cross_field_check": {"status": "Error", "message": "AI response not a dict"}
+            }
+        for field_key, data in ai_response.items():
+            value = data.get("value")
+            field_specific_rules = []
+            for fr in doc_rules.get("fields", []):
+                if fr.get("key") == field_key:
+                    field_specific_rules = fr.get("rules", [])
+                    break
+            is_valid, messages = self._validate_field(field_key, value, field_specific_rules)
+            field_validations[field_key] = {"is_valid": is_valid, "messages": messages}
+        mandatory_fields_list = doc_rules.get("mandatory_fields", [])
+        mandatory_passed, missing_fields = self._check_mandatory_fields(ai_response, mandatory_fields_list)
+        mandatory_check_result = {
+            "status": "Passed" if mandatory_passed else "Failed",
+            "missing_fields": missing_fields
+        }
+        cross_field_rules_list = doc_rules.get("cross_field_rules", [])
+        cross_field_passed, failed_cross_rules = self._check_cross_field_rules(ai_response, cross_field_rules_list)
+        cross_field_check_result = {
+            "status": "Passed" if cross_field_passed else "Failed",
+            "failed_rules": failed_cross_rules
+        }
+        logger.info(f"Validation for doc_type \'{doc_type}\': Fields: {field_validations}, Mandatory: {mandatory_check_result}, Cross-field: {cross_field_check_result}")
+        return {
+            "field_validations": field_validations,
+            "mandatory_check": mandatory_check_result,
+            "cross_field_check": cross_field_check_result
+        }
 
 class ConfidenceAdjuster:
-    def __init__(self):
-        self.confidence_map = {"High": 3, "Medium": 2, "Low": 1}
-        self.severity_impact = {"critical": -2, "high": -1.5, "medium": -1, "low": -0.5}
+    def __init__(self, high_confidence_threshold=0.8, medium_confidence_threshold=0.5, low_confidence_penalty=0.2, validation_failure_penalty=0.3, mandatory_failure_penalty=0.4):
+        self.high_confidence_threshold = high_confidence_threshold
+        self.medium_confidence_threshold = medium_confidence_threshold
+        self.low_confidence_penalty = low_confidence_penalty
+        self.validation_failure_penalty = validation_failure_penalty
+        self.mandatory_failure_penalty = mandatory_failure_penalty
 
-    def adjust_confidence(self, ai_confidence_label, field_validation_results):
-        ai_score = self.confidence_map.get(ai_confidence_label, 2) # Default to Medium if unknown
-        total_impact = 0
+    def _get_qualitative_confidence(self, score: float) -> str:
+        if score >= self.high_confidence_threshold:
+            return "High"
+        elif score >= self.medium_confidence_threshold:
+            return "Medium"
+        else:
+            return "Low"
 
-        for validation_detail in field_validation_results.get("details", []):
-            if validation_detail.get("status") == "fail":
-                severity = validation_detail.get("severity", "medium")
-                total_impact += self.severity_impact.get(severity, -1) # Default impact for unknown severity
-        
-        adjusted_score = ai_score + total_impact
-        
-        # Cap the scores
-        if adjusted_score > 3: adjusted_score = 3
-        if adjusted_score < 1: adjusted_score = 1
-        
-        # Map back to label
-        if adjusted_score >= 2.5: return "High"
-        if adjusted_score >= 1.5: return "Medium"
-        return "Low"
+    def adjust_confidence(self, ai_response: Dict[str, Any], validation_output: Dict[str, Any]) -> Dict[str, Any]:
+        adjusted_confidences = {}
+        if not isinstance(ai_response, dict):
+            logger.warning("AI response is not a dictionary. Cannot adjust confidence.")
+            return {}
+        for field_key, data in ai_response.items():
+            original_confidence_score = data.get("confidenceScore", 0.0) 
+            if not isinstance(original_confidence_score, (int, float)):
+                try:
+                    original_confidence_score = float(original_confidence_score)
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid confidence score format for {field_key}: {original_confidence_score}. Defaulting to 0.")
+                    original_confidence_score = 0.0
+            adjusted_score = original_confidence_score
+            field_validation_info = validation_output.get("field_validations", {}).get(field_key)
+            if field_validation_info and not field_validation_info["is_valid"]:
+                adjusted_score -= self.validation_failure_penalty
+                logger.debug(f"Applied validation failure penalty to {field_key}. Score: {original_confidence_score} -> {adjusted_score}")
+            adjusted_score = max(0, adjusted_score)
+            adjusted_confidences[field_key] = {
+                "original_score": original_confidence_score,
+                "original_qualitative": self._get_qualitative_confidence(original_confidence_score),
+                "adjusted_score": round(adjusted_score, 3),
+                "adjusted_qualitative": self._get_qualitative_confidence(adjusted_score),
+                "validation_messages": field_validation_info["messages"] if field_validation_info else []
+            }
+        return adjusted_confidences
 
-    def suggest_overall_document_confidence(self, all_field_adjusted_confidences, mandatory_check_result, cross_field_check_results):
-        """Suggests an overall document confidence based on field confidences and other checks."""
-        if not all_field_adjusted_confidences: return "Low" # No fields, low confidence
-
-        # Convert labels to scores for averaging
-        scores = [self.confidence_map.get(conf, 1) for conf in all_field_adjusted_confidences.values()]
-        avg_score = sum(scores) / len(scores) if scores else 1
-
-        if mandatory_check_result.get("status") == "fail":
-            avg_score -= 1 # Significant penalty for missing mandatory fields
-        
-        for cross_field_res in cross_field_check_results:
-            if cross_field_res.get("status") == "fail":
-                avg_score -= 0.5 # Penalty for each failed cross-field check
-        
-        # Cap and map back
-        if avg_score > 3: avg_score = 3
-        if avg_score < 1: avg_score = 1
-        if avg_score >= 2.5: return "High"
-        if avg_score >= 1.5: return "Medium"
-        return "Low"
-
-# Example Usage (for testing purposes)
-if __name__ == '__main__':
-    # Setup
-    rule_loader = ValidationRuleLoader()
-    invoice_rules = rule_loader.get_rules_for_document_type("Invoice")
-    
-    if invoice_rules:
-        validator = Validator(invoice_rules)
-        adjuster = ConfidenceAdjuster()
-
-        # --- Test Case 1: Valid InvoiceNumber ---
-        print("\n--- Test Case 1: Valid InvoiceNumber ---")
-        invoice_num_val_res = validator.validate_field("InvoiceNumber", "INV-123456")
-        print(f"Validation for InvoiceNumber ('INV-123456'): {invoice_num_val_res}")
-        adjusted_conf = adjuster.adjust_confidence("High", invoice_num_val_res)
-        print(f"AI Conf: High, Adjusted Conf: {adjusted_conf}")
-
-        # --- Test Case 2: Invalid InvoiceNumber (format) ---
-        print("\n--- Test Case 2: Invalid InvoiceNumber (format) ---")
-        invoice_num_val_res_fail = validator.validate_field("InvoiceNumber", "INV-123")
-        print(f"Validation for InvoiceNumber ('INV-123'): {invoice_num_val_res_fail}")
-        adjusted_conf_fail = adjuster.adjust_confidence("High", invoice_num_val_res_fail)
-        print(f"AI Conf: High, Adjusted Conf: {adjusted_conf_fail}")
-
-        # --- Test Case 3: Missing Mandatory InvoiceNumber ---
-        print("\n--- Test Case 3: Missing Mandatory InvoiceNumber ---")
-        invoice_num_val_res_missing = validator.validate_field("InvoiceNumber", None)
-        print(f"Validation for InvoiceNumber (None): {invoice_num_val_res_missing}")
-        adjusted_conf_missing = adjuster.adjust_confidence("High", invoice_num_val_res_missing)
-        print(f"AI Conf: High, Adjusted Conf: {adjusted_conf_missing}")
-
-        # --- Test Case 4: Valid InvoiceDate ---
-        print("\n--- Test Case 4: Valid InvoiceDate ---")
-        date_val_res = validator.validate_field("InvoiceDate", "2023-10-26")
-        print(f"Validation for InvoiceDate ('2023-10-26'): {date_val_res}")
-        adjusted_conf_date = adjuster.adjust_confidence("Medium", date_val_res)
-        print(f"AI Conf: Medium, Adjusted Conf: {adjusted_conf_date}")
-
-        # --- Test Case 5: Invalid TotalAmount (negative) ---
-        print("\n--- Test Case 5: Invalid TotalAmount (negative) ---")
-        amount_val_res = validator.validate_field("TotalAmount", "-100.00")
-        print(f"Validation for TotalAmount ('-100.00'): {amount_val_res}")
-        adjusted_conf_amount = adjuster.adjust_confidence("High", amount_val_res)
-        print(f"AI Conf: High, Adjusted Conf: {adjusted_conf_amount}")
-
-        # --- Test Case 6: Full Extracted Data for an Invoice ---
-        print("\n--- Test Case 6: Full Extracted Data for an Invoice ---")
-        extracted_data_invoice = {
-            "InvoiceNumber": "INV-98765",
-            "InvoiceDate": "2023-01-15",
-            "DueDate": "2023-01-10", # Intentionally before InvoiceDate for cross-field fail
-            "TotalAmount": "1250.75"
-            # Missing other mandatory fields if any were defined beyond these
-        }
-        all_field_confidences = {}
-        all_field_validation_statuses = {}
-
-        for field, value in extracted_data_invoice.items():
-            val_res = validator.validate_field(field, value)
-            all_field_validation_statuses[field] = val_res
-            # Assume AI confidence is 'High' for all for this test
-            adj_c = adjuster.adjust_confidence("High", val_res)
-            all_field_confidences[field] = adj_c
-            print(f"Field: {field}, Value: {value}, Validation: {val_res['status']}, AI Conf: High, Adj. Conf: {adj_c}")
-        
-        mandatory_check = validator.check_mandatory_fields(extracted_data_invoice)
-        print(f"Mandatory Fields Check: {mandatory_check}")
-        
-        cross_field_check = validator.validate_cross_fields(extracted_data_invoice)
-        print(f"Cross-Field Checks: {cross_field_check}")
-
-        overall_doc_conf = adjuster.suggest_overall_document_confidence(all_field_confidences, mandatory_check, cross_field_check)
-        print(f"Suggested Overall Document Confidence: {overall_doc_conf}")
-
-    else:
-        print("Could not load Invoice rules for testing.")
-
+    def get_overall_document_status(self, adjusted_confidence_output: Dict[str, Any], validation_output: Dict[str, Any]) -> Dict[str, Any]:
+        messages = []
+        overall_confidence_qualitative = "High"
+        num_low_confidence_fields = 0
+        num_medium_confidence_fields = 0
+        total_fields = len(adjusted_confidence_output)
+        if not total_fields:
+            return {"status": "Undetermined", "messages": ["No metadata fields processed for overall status."]}
+        for field_key, conf_data in adjusted_confidence_output.items():
+            if conf_data["adjusted_qualitative"] == "Low":
+                num_low_confidence_fields += 1
+            elif conf_data["adjusted_qualitative"] == "Medium":
+                num_medium_confidence_fields += 1
+        if num_low_confidence_fields > 0:
+            overall_confidence_qualitative = "Low"
+            messages.append(f"{num_low_confidence_fields}/{total_fields} fields have Low adjusted confidence.")
+        elif num_medium_confidence_fields > 0 :
+             overall_confidence_qualitative = "Medium"
+             messages.append(f"{num_medium_confidence_fields}/{total_fields} fields have Medium adjusted confidence (no Low confidence fields).")
+        else: 
+            messages.append("All fields have High adjusted confidence.")
+        mandatory_check = validation_output.get("mandatory_check", {})
+        if mandatory_check.get("status") == "Failed":
+            messages.append(f"Mandatory fields missing: {', '.join(mandatory_check.get('missing_fields', []))}")
+            if overall_confidence_qualitative != "Low":
+                 overall_confidence_qualitative = "Medium" if overall_confidence_qualitative == "High" else overall_confidence_qualitative
+        cross_field_check = validation_output.get("cross_field_check", {})
+        if cross_field_check.get("status") == "Failed":
+            messages.append(f"Cross-field validation rules failed: {', '.join(cross_field_check.get('failed_rules', []))}")
+            if overall_confidence_qualitative != "Low":
+                 overall_confidence_qualitative = "Medium" if overall_confidence_qualitative == "High" else overall_confidence_qualitative
+        if not messages:
+            messages.append("Overall document status appears good based on current checks.")
+        return {"status": overall_confidence_qualitative, "messages": messages}
 
