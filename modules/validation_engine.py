@@ -3,7 +3,7 @@ import json
 import re
 import logging
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Tuple
 
 
 logger = logging.getLogger(__name__)
