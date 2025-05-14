@@ -257,7 +257,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                             },
                             "raw_ai_response": extracted_metadata
                         }
-                        logger.info(f'Successfully EXTRACTED and STORED freeform metadata for {file_name} (ID: {file_id}) in UI-compatible format.')id})')
+                        logger.info(f'Successfully EXTRACTED and STORED freeform metadata for {file_name} (ID: {file_id}) in UI-compatible format.')
             elif file_id not in st.session_state.processing_state['errors']:
                 st.session_state.processing_state['errors'][file_id] = 'Extraction returned no data and no specific error.'
                 logger.warning(f'Extraction returned no data for {file_name} (ID: {file_id}).')
