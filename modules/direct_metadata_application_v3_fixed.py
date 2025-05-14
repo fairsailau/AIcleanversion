@@ -333,8 +333,8 @@ def apply_metadata_direct():
                 status_text.text(f"Batch {i+1}/{len(batches)}: Applying metadata to {file_name} ({file_id_in_batch_idx+1}/{len(batch_chunk)} of batch | Overall: {files_processed_count+1}/{total_files_to_apply})")
                 
                 result_data_wrapper = extraction_results_wrapper.get(file_id)
-                if not result_data_wrapper or 'ai_response' not in result_data_wrapper or 'template_id_used_for_extraction' not in result_data_wrapper:
-                    error_msg = f"Incomplete extraction data for file {file_name} (ID: {file_id}). Skipping application."
+                if not result_data_wrapper:
+                    error_msg = f"No extraction data for file {file_name} (ID: {file_id}). Skipping application."
                     logger.error(error_msg)
                     st.session_state.application_state['errors'][file_id] = error_msg
                     files_processed_count += 1
@@ -342,8 +342,34 @@ def apply_metadata_direct():
                     st.session_state.application_state['current_batch_progress'] = (file_id_in_batch_idx + 1) / len(batch_chunk)
                     progress_bar.progress(files_processed_count / total_files_to_apply)
                     continue
-
-                actual_metadata_values_from_ai = result_data_wrapper['ai_response']
+                
+                # Check for raw_ai_response (new format) or ai_response (old format)
+                if 'raw_ai_response' in result_data_wrapper:
+                    actual_metadata_values_from_ai = result_data_wrapper['raw_ai_response']
+                elif 'ai_response' in result_data_wrapper:
+                    actual_metadata_values_from_ai = result_data_wrapper['ai_response']
+                else:
+                    error_msg = f"Missing AI response data for file {file_name} (ID: {file_id}). Skipping application."
+                    logger.error(error_msg)
+                    st.session_state.application_state['errors'][file_id] = error_msg
+                    files_processed_count += 1
+                    st.session_state.application_state['applied_files'] = files_processed_count
+                    st.session_state.application_state['current_batch_progress'] = (file_id_in_batch_idx + 1) / len(batch_chunk)
+                    progress_bar.progress(files_processed_count / total_files_to_apply)
+                    continue
+                
+                # Check for template_id_used_for_extraction
+                if 'template_id_used_for_extraction' not in result_data_wrapper:
+                    error_msg = f"Missing template ID for file {file_name} (ID: {file_id}). Skipping application."
+                    logger.error(error_msg)
+                    st.session_state.application_state['errors'][file_id] = error_msg
+                    files_processed_count += 1
+                    st.session_state.application_state['applied_files'] = files_processed_count
+                    st.session_state.application_state['current_batch_progress'] = (file_id_in_batch_idx + 1) / len(batch_chunk)
+                    progress_bar.progress(files_processed_count / total_files_to_apply)
+                    continue
+                
+                file_specific_template_id = result_data_wrapper['template_id_used_for_extraction']
                 file_specific_template_id = result_data_wrapper['template_id_used_for_extraction']
                 
                 logger.info(f"APPLY_DIRECT: File ID {file_id}: Preparing to apply. Raw AI Response: {actual_metadata_values_from_ai}. Template ID for application: {file_specific_template_id}")
