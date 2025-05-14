@@ -162,8 +162,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 else:
                     # This block is now correctly indented
                     if 'rule_loader' not in st.session_state:
-                        st.session_state.rule_loader = ValidationRuleLoader(config_path='config/validation_rules.json')
-                    if 'validator' not in st.session_state:
+                        st.session_state.rule_loader = ValidationRuleLoader(rules_config_path=\                   if 'validator' not in st.session_state:
                         st.session_state.validator = Validator()
                     if 'confidence_adjuster' not in st.session_state:
                         st.session_state.confidence_adjuster = ConfidenceAdjuster()
