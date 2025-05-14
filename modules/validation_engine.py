@@ -92,7 +92,7 @@ class Validator:
                         is_valid = False
                         messages.append(message)
                 elif expected_type == "boolean":
-                    if not isinstance(value, bool) and str(value).lower() not in [\'true\', \'false\', \'yes\', \'no\', \'1\', \'0\']:
+                    if not isinstance(value, bool) and str(value).lower() not in ['true', 'false', 'yes', 'no', '1', '0']:
                         is_valid = False
                         messages.append(message)
             elif rule_type == "enum":
