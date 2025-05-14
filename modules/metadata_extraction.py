@@ -2,11 +2,35 @@ import streamlit as st
 import logging
 import json
 import requests
+import time
 from typing import Dict, Any, List, Optional
+from .retry import RetryManager, CircuitBreaker
 
 # Corrected logging.basicConfig format string
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Set up circuit breaker and retry manager for Box AI API calls
+box_ai_circuit_breaker = CircuitBreaker(
+    name="box_ai_api",
+    failure_threshold=3,       # Open circuit after 3 consecutive failures
+    recovery_timeout=60,       # Wait 60 seconds before trying again
+    half_open_max_calls=2      # Allow 2 test calls when half-open
+)
+
+box_ai_retry_manager = RetryManager(
+    max_retries=3,             # Retry up to 3 times
+    base_delay=2.0,            # Start with 2 second delay
+    max_delay=30.0,            # Maximum of 30 seconds between retries
+    backoff_factor=2.0,        # Double the delay after each failure
+    jitter=0.2,                # Add 20% randomness to delay
+    retry_exceptions=[         # Only retry these specific errors
+        requests.exceptions.Timeout,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.HTTPError
+    ],
+    circuit_breaker=box_ai_circuit_breaker  # Connect to circuit breaker
+)
 
 def get_extraction_functions() -> Dict[str, Any]:
     """
@@ -70,11 +94,43 @@ def get_extraction_functions() -> Dict[str, Any]:
                 raise ValueError('Either fields or metadata_template must be provided for structured extraction')
 
             logger.info(f'Making Box AI API call for structured extraction with request: {json.dumps(request_body)}')
-            response = requests.post(api_url, headers=headers, json=request_body)
-
-            if response.status_code != 200:
-                logger.error(f'Box AI API error response: {response.status_code} - {response.reason}. Body: {response.text}')
-                return {'error': f'Error in Box AI API call: {response.status_code} {response.reason}', 'details': response.text}
+            
+            # Wrap the API call with the retry manager
+            def make_api_call():
+                response = requests.post(api_url, headers=headers, json=request_body)
+                if response.status_code != 200:
+                    if response.status_code >= 500:
+                        # Server errors are potentially transient - raise an exception that will trigger retry
+                        error = requests.exceptions.HTTPError(f"Box API server error: {response.status_code}")
+                        error.response = response
+                        raise error
+                    else:
+                        # Client errors are not likely to be resolved by retry
+                        logger.error(f'Box AI API client error: {response.status_code} - {response.reason}. Body: {response.text}')
+                        return {'error': f'Error in Box AI API call: {response.status_code} {response.reason}', 'details': response.text}
+                return response
+            
+            try:
+                response_or_error = box_ai_retry_manager.execute(make_api_call)
+                if isinstance(response_or_error, dict) and 'error' in response_or_error:
+                    return response_or_error  # It's already an error response
+                response = response_or_error  # It's a successful response
+            except Exception as e:
+                logger.error(f'Box AI API call failed after retries: {str(e)}')
+                # Track API errors in session state for potential retry later
+                if 'api_errors' not in st.session_state:
+                    st.session_state.api_errors = []
+                
+                error_details = {
+                    'file_id': file_id,
+                    'timestamp': time.time(),
+                    'error': str(e),
+                    'api': 'structured_extraction',
+                    'retry_count': box_ai_retry_manager.total_retries
+                }
+                st.session_state.api_errors.append(error_details)
+                
+                return {'error': f'Error in Box AI API call after retries: {str(e)}', 'details': str(e)}
 
             response_data = response.json()
             logger.info(f'Raw Box AI structured extraction response data: {json.dumps(response_data)}')
@@ -240,11 +296,43 @@ def get_extraction_functions() -> Dict[str, Any]:
             request_body = {'items': items, 'prompt': enhanced_prompt, 'ai_agent': ai_agent}
 
             logger.info(f'Making Box AI API call for freeform extraction with request: {json.dumps(request_body)}')
-            response = requests.post(api_url, headers=headers, json=request_body)
-
-            if response.status_code != 200:
-                logger.error(f'Box AI API error response: {response.status_code} - {response.reason}. Body: {response.text}')
-                return {'error': f'Error in Box AI API call: {response.status_code} {response.reason}', 'details': response.text}
+            
+            # Wrap the API call with the retry manager
+            def make_api_call():
+                response = requests.post(api_url, headers=headers, json=request_body)
+                if response.status_code != 200:
+                    if response.status_code >= 500:
+                        # Server errors are potentially transient - raise an exception that will trigger retry
+                        error = requests.exceptions.HTTPError(f"Box API server error: {response.status_code}")
+                        error.response = response
+                        raise error
+                    else:
+                        # Client errors are not likely to be resolved by retry
+                        logger.error(f'Box AI API client error: {response.status_code} - {response.reason}. Body: {response.text}')
+                        return {'error': f'Error in Box AI API call: {response.status_code} {response.reason}', 'details': response.text}
+                return response
+            
+            try:
+                response_or_error = box_ai_retry_manager.execute(make_api_call)
+                if isinstance(response_or_error, dict) and 'error' in response_or_error:
+                    return response_or_error  # It's already an error response
+                response = response_or_error  # It's a successful response
+            except Exception as e:
+                logger.error(f'Box AI API call failed after retries: {str(e)}')
+                # Track API errors in session state for potential retry later
+                if 'api_errors' not in st.session_state:
+                    st.session_state.api_errors = []
+                
+                error_details = {
+                    'file_id': file_id,
+                    'timestamp': time.time(),
+                    'error': str(e),
+                    'api': 'freeform_extraction',
+                    'retry_count': box_ai_retry_manager.total_retries
+                }
+                st.session_state.api_errors.append(error_details)
+                
+                return {'error': f'Error in Box AI API call after retries: {str(e)}', 'details': str(e)}
 
             response_data = response.json()
             logger.info(f'Raw Box AI freeform extraction response data: {json.dumps(response_data)}')
