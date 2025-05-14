@@ -160,9 +160,10 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     logger.error(err_msg)
                     st.session_state.processing_state['errors'][file_id] = err_msg
                 else:
-                    # This block is now correctly indented
+                    # This block is for initializing validation components and storing results
                     if 'rule_loader' not in st.session_state:
-                        st.session_state.rule_loader = ValidationRuleLoader(rules_config_path=\                   if 'validator' not in st.session_state:
+                        st.session_state.rule_loader = ValidationRuleLoader(rules_config_path='config/validation_rules.json')
+                    if 'validator' not in st.session_state:
                         st.session_state.validator = Validator()
                     if 'confidence_adjuster' not in st.session_state:
                         st.session_state.confidence_adjuster = ConfidenceAdjuster()
@@ -170,6 +171,34 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     if extraction_method == 'structured':
                         rules = st.session_state.rule_loader.get_rules_for_doc_type(current_doc_type)
                         validation_output = st.session_state.validator.validate(extracted_metadata, rules, current_doc_type)
+                        confidence_output = st.session_state.confidence_adjuster.adjust_confidence(extracted_metadata, validation_output)
+                        overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
+
+                        st.session_state.extraction_results[file_id] = {
+                            'file_name': file_name,
+                            'ai_response': extracted_metadata,
+                            'validation_details': validation_output.get('field_validations', {}),
+                            'mandatory_check': validation_output.get('mandatory_check', {}),
+                            'cross_field_check': validation_output.get('cross_field_check', {}),
+                            'adjusted_confidence': confidence_output,
+                            'overall_status': overall_status_info,
+                            'document_type': current_doc_type,
+                            'extraction_method': extraction_method
+                        }
+                        logger.info(f'Successfully extracted and stored structured metadata with validation for {file_name} (ID: {file_id})')
+                    elif extraction_method == 'freeform':
+                        st.session_state.extraction_results[file_id] = {
+                            'file_name': file_name,
+                            'ai_response': extracted_metadata, # Store raw AI response
+                            'validation_details': {}, # No validation for freeform
+                            'mandatory_check': {'status': 'N/A', 'missing_fields': []},
+                            'cross_field_check': {'status': 'N/A', 'failed_rules': []},
+                            'adjusted_confidence': {}, # No adjusted confidence for freeform
+                            'overall_status': {'status': 'N/A', 'messages': ['Validation not applicable for freeform.']},
+                            'document_type': current_doc_type,
+                            'extraction_method': extraction_method
+                        }
+                        logger.info(f'Successfully extracted and stored freeform metadata for {file_name} (ID: {file_id})')
                         confidence_output = st.session_state.confidence_adjuster.adjust_confidence(extracted_metadata, validation_output)
                         overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
 
