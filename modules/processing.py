@@ -17,7 +17,6 @@ def get_template_id_for_file(file_id: str, file_doc_type: Optional[str], session
     """Determines the template ID for a file based on config and categorization."""
     metadata_config = session_state.get('metadata_config', {})
     extraction_method = metadata_config.get('extraction_method', 'freeform')
-
     if extraction_method == 'structured':
         # Correctly access document_type_to_template from the main session_state
         document_type_to_template_mapping = session_state.get('document_type_to_template', {})
@@ -177,7 +176,6 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                         # --- Restructure results to match results_viewer.py expectations ---
                         fields_for_ui = {}
                         raw_ai_data = extracted_metadata if isinstance(extracted_metadata, dict) else {}
-
                         for field_key, ai_field_data in raw_ai_data.items():
                             value = None
                             original_ai_confidence_score = 0.0 # Default
@@ -271,8 +269,9 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
         st.session_state.processing_state['processed_files'] = processed_count
 
     st.session_state.processing_state['is_processing'] = False
-    logger.info(f"FINAL CHECK before exiting process_files_with_progress: st.session_state.extraction_results contains {len(st.session_state.get(\'extraction_results\', {}))} items.")
-    logger.debug(f"FINAL CHECK content of extraction_results: {json.dumps(st.session_state.get(\'extraction_results\', {}), indent=2, default=str)}")
+    # Fixed f-string expressions by removing backslashes within expressions
+    logger.info(f"FINAL CHECK before exiting process_files_with_progress: st.session_state.extraction_results contains {len(st.session_state.get('extraction_results', {}))} items.")
+    logger.debug(f"FINAL CHECK content of extraction_results: {json.dumps(st.session_state.get('extraction_results', {}), indent=2, default=str)}")
     logger.info("Metadata extraction process finished for all selected files.")
     st.rerun()
 
@@ -343,6 +342,7 @@ def process_files():
             with col2:
                 retry_delay = st.number_input('Retry Delay (s)', min_value=1, max_value=30, value=st.session_state.processing_state.get('retry_delay', 2), key='retry_delay_input_proc')
                 st.session_state.processing_state['retry_delay'] = retry_delay
+                
                 processing_mode = st.selectbox('Processing Mode', options=['Sequential', 'Parallel'], index=0, key='processing_mode_input_proc', help='Parallel processing is experimental.')
                 st.session_state.processing_state['processing_mode'] = processing_mode
         
@@ -452,4 +452,3 @@ def process_files():
                     del st.session_state[key_to_clear]
             st.session_state.current_page = "Home"
             st.rerun()
-
