@@ -2,7 +2,12 @@
   "document_types": [
     {
       "name": "Default",
-      "fields": [],
+      "fields": [
+        {
+          "key": "any_field",
+          "rules": []
+        }
+      ],
       "mandatory_fields": [],
       "cross_field_rules": []
     }
