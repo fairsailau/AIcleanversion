@@ -259,8 +259,8 @@ def view_results():
                 
                 doc_summary = detailed_data.get('document_validation_summary', {})
                 st.markdown(f"**Overall Document Suggested Confidence:** <span style='color:{get_confidence_color(doc_summary.get('overall_document_confidence_suggestion', 'N/A'))};'>{doc_summary.get('overall_document_confidence_suggestion', 'N/A')}</span>", unsafe_allow_html=True)
-                st.markdown(f"**Mandatory Fields Status:** <span style='color:{'green' if doc_summary.get('mandatory_fields_status') == 'pass' else 'red'};'>{doc_summary.get('mandatory_fields_status', 'N/A')}</span>", unsafe_allow_html=True)
-                if doc_summary.get('mandatory_fields_status') == 'fail':
+                st.markdown(f"**Mandatory Fields Status:** <span style='color:{'green' if doc_summary.get('mandatory_fields_status', '').lower() == 'passed' else 'red'};'>{doc_summary.get('mandatory_fields_status', 'N/A')}</span>", unsafe_allow_html=True)
+                if doc_summary.get('mandatory_fields_status', '').lower() == 'failed':
                     st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;*Missing*: {', '.join(doc_summary.get('missing_mandatory_fields', []))}")
                 st.markdown(f"**Cross-Field Validation Status:** <span style='color:{'green' if doc_summary.get('cross_field_status') == 'pass' else 'red'};'>{doc_summary.get('cross_field_status', 'N/A')}</span>", unsafe_allow_html=True)
                 if doc_summary.get('cross_field_status') == 'fail':
