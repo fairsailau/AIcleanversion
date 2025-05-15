@@ -193,7 +193,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                             overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
 
                             # --- Restructure results to match results_viewer.py expectations ---
-                            fields_for_ui = {}
+                            # Get the validation rules for mandatory field checksn                            validation_rules = st.session_state.validator.get_rules_for_category_template(n                                doc_category=doc_category,n                                template_id=template_id_for_validationn                            )n                                                        fields_for_ui = {}
                             raw_ai_data = extracted_metadata if isinstance(extracted_metadata, dict) else {}
                             for field_key, ai_field_data in raw_ai_data.items():
                                 value = None
@@ -236,7 +236,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                                     "validations": field_validation_details.get("messages", []),
                                     "field_validation_status": field_validation_details.get("status", "skip"),
                                     "adjusted_confidence": adjusted_confidence,
-                                    "is_mandatory": field_key in rules.get("mandatory_fields", []),
+                                    "is_mandatory": field_key in validation_rules.get("mandatory_fields", []),
                                     "is_present": value is not None and str(value).strip() != ""
                                 }
 
