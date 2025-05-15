@@ -23,14 +23,28 @@ def show_template_rule_overview(rule_set: Dict[str, Any]):
     
     # Get template fields if available
     template_fields = []
+    template_field_objects = []
     if "metadata_templates" in st.session_state and template_id in st.session_state.metadata_templates:
         template = st.session_state.metadata_templates[template_id]
-        template_fields = [field.get("key", "unknown") for field in template.get("fields", [])]
+        template_field_objects = template.get("fields", [])
+        template_fields = [field.get("key", "unknown") for field in template_field_objects]
     
     # 1. Field Rules
     st.subheader("Field Rules")
     field_rules_data = []
     
+    # Initialize fields in rule_set if they don't already exist
+    if "fields" not in rule_set:
+        rule_set["fields"] = []
+    
+    # Ensure all template fields are represented in the rule set
+    existing_field_keys = [field.get("key") for field in rule_set.get("fields", [])]
+    for field_key in template_fields:
+        if field_key not in existing_field_keys:
+            # Add field to rule set
+            rule_set["fields"].append({"key": field_key, "rules": []})
+    
+    # Display field rules
     for field_def in rule_set.get("fields", []):
         field_key = field_def.get("key", "unknown")
         field_rules = field_def.get("rules", [])
@@ -39,125 +53,184 @@ def show_template_rule_overview(rule_set: Dict[str, Any]):
             field_rules_data.append({
                 "Field": field_key,
                 "Rule Type": "No rules defined",
-                "Description": "",
-                "Index": -1
+                "Description": ""
             })
         else:
             for i, rule in enumerate(field_rules):
                 field_rules_data.append({
                     "Field": field_key,
                     "Rule Type": rule.get("type", "unknown"),
-                    "Description": format_rule_for_display(rule, "field"),
+                    "Description": format_rule_for_display(rule),
                     "Index": i
                 })
     
-    field_rules_df = pd.DataFrame(field_rules_data)
-    
-    # Field selector - prioritize template fields if available
-    available_fields = template_fields if template_fields else ["custom_field_1", "custom_field_2"]
-    
-    # Get existing field keys to avoid duplicates
-    existing_field_keys = [field.get("key", "") for field in rule_set.get("fields", [])]
-    available_fields = [f for f in available_fields if f not in existing_field_keys]
-    
-    # Add field selector
-    add_col1, add_col2 = st.columns([3, 1])
-    with add_col1:
-        new_field_key = st.selectbox(
-            "Select field to add rules for",
-            options=["--- Select Field ---"] + available_fields,
-            key="new_category_template_field"
-        )
-    
-    with add_col2:
-        if new_field_key != "--- Select Field ---":
-            if st.button("Add Field", key="add_category_template_field_btn"):
-                if "fields" not in rule_set:
-                    rule_set["fields"] = []
-                    
-                rule_set["fields"].append({"key": new_field_key, "rules": []})
-                save_validation_rules(st.session_state.validation_rules)
-                st.success(f"Added field '{new_field_key}'")
-                st.rerun()
-    
-    # Add rule for existing field
-    if existing_field_keys:
-        add_rule_col1, add_rule_col2 = st.columns([3, 1])
-        with add_rule_col1:
-            add_rule_field = st.selectbox(
-                "Add rule for existing field",
-                options=["--- Select Field ---"] + existing_field_keys,
-                key="add_rule_for_field"
+    if field_rules_data:
+        df = pd.DataFrame(field_rules_data)
+        st.dataframe(df)
+        
+        # Add UI to add rules
+        col1, col2 = st.columns(2)
+        with col1:
+            # Select field
+            field_to_select = st.selectbox(
+                "Select field to add rules for",
+                options=template_fields,
+                key="field_selector"
             )
         
-        with add_rule_col2:
-            if add_rule_field != "--- Select Field ---":
-                if st.button("Add Rule", key="add_field_rule_to_existing"):
-                    st.session_state.is_editing_rule = True
-                    st.session_state.editing_rule_type = "field"
-                    st.session_state.editing_rule_index = -1
-                    st.session_state.editing_rule_data = {
-                        "field_key": add_rule_field,
-                        "category": category,
-                        "template_id": template_id
-                    }
-                    st.rerun()
+        with col2:
+            # Add field button
+            add_field_button = st.button("Add Rule", key="add_field_button")
+            if add_field_button and field_to_select:
+                st.session_state.editing_field_key = field_to_select
+                st.session_state.editing_rule_index = -1
+                st.session_state.is_editing_rule = True
+                st.rerun()
+                
+    else:
+        st.info("No field rules defined yet. Add rules to fields below.")
+        
+        # Add a field
+        selected_field = st.selectbox("Select field to add rules for", options=template_fields)
+        
+        if selected_field and st.button("Add Rule for Field"):
+            st.session_state.editing_field_key = selected_field
+            st.session_state.editing_rule_index = -1
+            st.session_state.is_editing_rule = True
+            st.rerun()
     
-    # Display existing field rules
-    if not field_rules_df.empty:
-        st.dataframe(field_rules_df[["Field", "Rule Type", "Description"]])
+    # Handle rule editing UI
+    if st.session_state.get("is_editing_rule", False):
+        field_key = st.session_state.editing_field_key
+        rule_index = st.session_state.editing_rule_index
         
-        # Edit and delete buttons
-        edit_rule_col, delete_rule_col = st.columns(2)
-        with edit_rule_col:
-            if len(field_rules_data) > 0:
-                edit_rule_index = st.number_input(
-                    "Rule index to edit", 
-                    min_value=0, 
-                    max_value=len(field_rules_data)-1,
-                    value=0,
-                    key="edit_category_template_rule_index",
-                    step=1
+        st.subheader(f"{'Edit' if rule_index >= 0 else 'Add'} Rule for Field: {field_key}")
+        
+        # Find the field definition
+        field_def = next((f for f in rule_set.get("fields", []) if f.get("key") == field_key), None)
+        
+        if not field_def:
+            # Field doesn't exist yet, create it
+            field_def = {"key": field_key, "rules": []}
+            rule_set["fields"].append(field_def)
+        
+        # Get existing rule if editing
+        existing_rule = {}
+        if rule_index >= 0 and "rules" in field_def and rule_index < len(field_def["rules"]):
+            existing_rule = field_def["rules"][rule_index]
+        
+        # Rule type selection
+        rule_type_options = list(FIELD_RULE_TYPES.keys())
+        rule_type = st.selectbox(
+            "Rule Type",
+            options=rule_type_options,
+            index=rule_type_options.index(existing_rule.get("type", "regex")) if existing_rule.get("type") in rule_type_options else 0
+        )
+        
+        # Rule parameters based on selected type
+        rule_params = {}
+        rule_type_info = FIELD_RULE_TYPES.get(rule_type, {})
+        
+        for param in rule_type_info.get("params", []):
+            param_desc = rule_type_info.get("param_descriptions", {}).get(param, param)
+            rule_params[param] = st.text_input(
+                f"{param} ({param_desc})",
+                value=existing_rule.get(param, ""),
+                key=f"param_{param}"
+            )
+        
+        # Error message
+        error_message = st.text_area(
+            "Error Message (shown when validation fails)",
+            value=existing_rule.get("message", f"Invalid {field_key}"),
+            key="error_message"
+        )
+        
+        # Buttons
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("Save Rule"):
+                # Create the rule
+                new_rule = {
+                    "type": rule_type,
+                    "message": error_message,
+                    **rule_params
+                }
+                
+                # Update or add the rule
+                if rule_index >= 0 and "rules" in field_def and rule_index < len(field_def["rules"]):
+                    field_def["rules"][rule_index] = new_rule
+                else:
+                    if "rules" not in field_def:
+                        field_def["rules"] = []
+                    field_def["rules"].append(new_rule)
+                
+                # Save the updated validation rules
+                save_validation_rules(st.session_state.validation_rules)
+                
+                # Reset editing state
+                st.session_state.is_editing_rule = False
+                st.success(f"{'Updated' if rule_index >= 0 else 'Added'} rule for field '{field_key}'")
+                st.rerun()
+        
+        with col2:
+            if st.button("Cancel"):
+                st.session_state.is_editing_rule = False
+                st.rerun()
+    
+    # Add rule deletion UI
+    if field_rules_data and not st.session_state.get("is_editing_rule", False):
+        st.subheader("Delete Rules")
+        
+        # Get fields that have rules
+        fields_with_rules = []
+        field_rule_counts = {}
+        
+        for data in field_rules_data:
+            if data["Rule Type"] != "No rules defined":
+                field_key = data["Field"]
+                if field_key not in fields_with_rules:
+                    fields_with_rules.append(field_key)
+                    field_rule_counts[field_key] = 1
+                else:
+                    field_rule_counts[field_key] += 1
+        
+        if fields_with_rules:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Select field to delete rules from
+                selected_field = st.selectbox(
+                    "Select Field",
+                    options=fields_with_rules,
+                    key="delete_field_selector"
                 )
-                if st.button("Edit Rule", key="edit_category_template_rule_btn"):
-                    selected_row = field_rules_data[int(edit_rule_index)]
-                    if selected_row["Rule Type"] != "No rules defined":
-                        field_key = selected_row["Field"]
-                        rule_index = selected_row["Index"]
-                        st.session_state.is_editing_rule = True
-                        st.session_state.editing_rule_type = "field"
-                        st.session_state.editing_rule_index = rule_index
-                        st.session_state.editing_rule_data = {
-                            "field_key": field_key,
-                            "category": category,
-                            "template_id": template_id
-                        }
+                
+                # Get the number of rules for this field
+                rule_count = field_rule_counts.get(selected_field, 0)
+                
+                if rule_count > 0:
+                    rule_index = st.number_input(
+                        "Rule Index",
+                        min_value=0,
+                        max_value=rule_count - 1,
+                        value=0,
+                        key="delete_rule_index"
+                    )
+                else:
+                    st.info(f"No rules to delete for field '{selected_field}'")
+            
+            with col2:
+                if rule_count > 0 and st.button("Delete Rule"):
+                    # Find the field and delete the rule
+                    field_def = next((f for f in rule_set.get("fields", []) if f.get("key") == selected_field), None)
+                    
+                    if field_def and "rules" in field_def and 0 <= rule_index < len(field_def["rules"]):
+                        field_def["rules"].pop(int(rule_index))
+                        save_validation_rules(st.session_state.validation_rules)
+                        st.success(f"Deleted rule {rule_index} from field '{selected_field}'")
                         st.rerun()
-        
-        with delete_rule_col:
-            if len(field_rules_data) > 0:
-                delete_rule_index = st.number_input(
-                    "Rule index to delete", 
-                    min_value=0, 
-                    max_value=len(field_rules_data)-1,
-                    value=0,
-                    key="delete_category_template_rule_index",
-                    step=1
-                )
-                if st.button("Delete Rule", key="delete_category_template_rule_btn"):
-                    selected_row = field_rules_data[int(delete_rule_index)]
-                    if selected_row["Rule Type"] != "No rules defined":
-                        field_key = selected_row["Field"]
-                        rule_index = selected_row["Index"]
-                        
-                        # Find the field definition and delete the rule
-                        for field_def in rule_set.get("fields", []):
-                            if field_def.get("key") == field_key:
-                                if 0 <= rule_index < len(field_def.get("rules", [])):
-                                    field_def["rules"].pop(rule_index)
-                                    save_validation_rules(st.session_state.validation_rules)
-                                    st.success(f"Deleted rule {rule_index} from field '{field_key}'")
-                                    st.rerun()
     else:
         st.info("No field rules defined yet. Add fields and rules above.")
     
@@ -172,14 +245,31 @@ def show_template_rule_overview(rule_set: Dict[str, Any]):
     else:
         st.info("No mandatory fields defined.")
     
-    if st.button("Edit Mandatory Fields", key="edit_category_template_mandatory"):
-        st.session_state.is_editing_rule = True
-        st.session_state.editing_rule_type = "mandatory"
-        st.session_state.editing_rule_data = {
-            "category": category,
-            "template_id": template_id
-        }
-        st.rerun()
+    # Add UI to manage mandatory fields
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        field_options = [f for f in template_fields if f not in mandatory_fields]
+        if field_options:
+            field_to_add = st.selectbox("Add Mandatory Field", options=field_options, key="mandatory_field_add")
+            if st.button("Add as Mandatory"):
+                mandatory_fields.append(field_to_add)
+                rule_set["mandatory_fields"] = mandatory_fields
+                save_validation_rules(st.session_state.validation_rules)
+                st.success(f"Added '{field_to_add}' as mandatory field")
+                st.rerun()
+        else:
+            st.info("All fields are already marked as mandatory")
+    
+    with col2:
+        if mandatory_fields:
+            field_to_remove = st.selectbox("Remove Mandatory Field", options=mandatory_fields, key="mandatory_field_remove")
+            if st.button("Remove from Mandatory"):
+                mandatory_fields.remove(field_to_remove)
+                rule_set["mandatory_fields"] = mandatory_fields
+                save_validation_rules(st.session_state.validation_rules)
+                st.success(f"Removed '{field_to_remove}' from mandatory fields")
+                st.rerun()
     
     st.divider()
     
