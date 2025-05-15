@@ -6,7 +6,28 @@ from typing import Dict, List, Any, Optional, Tuple
 from modules.validation_engine import ValidationRuleLoader
 from modules.metadata_template_retrieval import get_metadata_templates
 # Import the template-based rule functions
-from modules.category_template_rules import manage_template_rules, show_template_rule_overview, save_validation_rules
+from modules.category_template_rules import manage_template_rules, show_template_rule_overview
+
+# Define save_validation_rules here if it's not in the deployed version
+def save_validation_rules(rules_data):
+    """Save validation rules to config file"""
+    try:
+        # Ensure we have rule_loader in session state
+        if 'rule_loader' not in st.session_state:
+            st.session_state.rule_loader = ValidationRuleLoader(rules_config_path='config/validation_rules.json')
+        
+        # Update the rules in the rule loader
+        st.session_state.rule_loader.rules = rules_data
+        
+        # Save to file
+        config_path = st.session_state.rule_loader.rules_config_path
+        with open(config_path, 'w') as f:
+            json.dump(rules_data, f, indent=2)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error saving validation rules: {e}")
+        return False
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
