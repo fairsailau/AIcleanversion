@@ -212,18 +212,30 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                                 
                                 original_ai_confidence_qualitative = st.session_state.confidence_adjuster._get_qualitative_confidence(original_ai_confidence_score)
 
-                                field_validation_details = validation_output.get("field_validations", {}).get(field_key, {"is_valid": True, "messages": []})
-                                field_adjusted_confidence_details = confidence_output.get(field_key, {
-                                    "adjusted_qualitative": original_ai_confidence_qualitative, # Fallback
-                                    "validation_messages": field_validation_details.get("messages", [])
-                                })
+                                # Get validation details with proper defaults
+                                field_validation_details = validation_output.get("field_validations", {}).get(field_key, {"is_valid": True, "status": "skip", "messages": []})
+                                
+                                # Get adjusted confidence with safe handling
+                                field_adjusted_confidence_details = confidence_output.get(field_key, {})
+                                
+                                # Handle different formats of confidence data
+                                adjusted_confidence = original_ai_confidence_qualitative  # Default fallback
+                                
+                                # Check if it's a dictionary with confidence_qualitative
+                                if isinstance(field_adjusted_confidence_details, dict):
+                                    if "confidence_qualitative" in field_adjusted_confidence_details:
+                                        adjusted_confidence = field_adjusted_confidence_details["confidence_qualitative"]
+                                # Check if it's already a string value
+                                elif isinstance(field_adjusted_confidence_details, str):
+                                    adjusted_confidence = field_adjusted_confidence_details
 
+                                # Build the field data for UI display
                                 fields_for_ui[field_key] = {
                                     "value": value,
                                     "ai_confidence": original_ai_confidence_qualitative,
                                     "validations": field_validation_details.get("messages", []),
-                                    "field_validation_status": "pass" if field_validation_details.get("is_valid") else "fail",
-                                    "adjusted_confidence": field_adjusted_confidence_details.get("adjusted_qualitative"),
+                                    "field_validation_status": field_validation_details.get("status", "skip"),
+                                    "adjusted_confidence": adjusted_confidence,
                                     "is_mandatory": field_key in rules.get("mandatory_fields", []),
                                     "is_present": value is not None and str(value).strip() != ""
                                 }
@@ -231,8 +243,6 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                             document_summary_for_ui = {
                                 "mandatory_fields_status": validation_output.get("mandatory_check", {}).get("status", "N/A"),
                                 "missing_mandatory_fields": validation_output.get("mandatory_check", {}).get("missing_fields", []),
-                                "cross_field_status": validation_output.get("cross_field_check", {}).get("status", "N/A"),
-                                "cross_field_results": validation_output.get("cross_field_check", {}).get("failed_rules", []),
                                 "overall_document_confidence_suggestion": overall_status_info.get("status", "N/A")
                             }
 
