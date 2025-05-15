@@ -9,6 +9,90 @@ import pandas as pd
 from typing import Dict, Any
 import json
 
+# Constants for rule types
+FIELD_RULE_TYPES = {
+    "regex": {
+        "label": "Regular Expression",
+        "description": "Validate that the field value matches a regular expression pattern",
+        "params": ["pattern"],
+        "param_descriptions": {
+            "pattern": "Regular expression pattern to match"
+        }
+    },
+    "enum": {
+        "label": "Enumeration",
+        "description": "Validate that the field value is one of a list of allowed values",
+        "params": ["values"],
+        "param_descriptions": {
+            "values": "Comma-separated list of allowed values"
+        }
+    },
+    "min_length": {
+        "label": "Minimum Length",
+        "description": "Validate that the field value has at least the specified length",
+        "params": ["length"],
+        "param_descriptions": {
+            "length": "Minimum length (integer)"
+        }
+    },
+    "max_length": {
+        "label": "Maximum Length",
+        "description": "Validate that the field value does not exceed the specified length",
+        "params": ["length"],
+        "param_descriptions": {
+            "length": "Maximum length (integer)"
+        }
+    },
+    "dataType": {
+        "label": "Data Type",
+        "description": "Validate that the field value is of a specific data type",
+        "params": ["type"],
+        "param_descriptions": {
+            "type": "Data type (string, number, boolean, date)"
+        }
+    }
+}
+
+def format_rule_for_display(rule, rule_type="field"):
+    """Format a rule for display in the UI"""
+    rule_type_str = rule.get("type", "unknown")
+    
+    if rule_type_str in FIELD_RULE_TYPES:
+        rule_info = FIELD_RULE_TYPES[rule_type_str]
+        display_parts = [rule_info.get("label", rule_type_str)]
+        
+        # Add params
+        for param in rule_info.get("params", []):
+            if param in rule:
+                param_display = f"{param}: {rule[param]}"
+                display_parts.append(param_display)
+        
+        return " | ".join(display_parts)
+    else:
+        # Fallback for unknown rule types
+        return f"Type: {rule_type_str} | Params: {', '.join([f'{k}:{v}' for k, v in rule.items() if k != 'type'])}"
+
+def save_validation_rules(rules_data):
+    """Save validation rules to config file"""
+    try:
+        # Ensure we have rule_loader in session state
+        if 'rule_loader' not in st.session_state:
+            from modules.validation_engine import ValidationRuleLoader
+            st.session_state.rule_loader = ValidationRuleLoader(rules_config_path='config/validation_rules.json')
+        
+        # Update the rules in the rule loader
+        st.session_state.rule_loader.rules = rules_data
+        
+        # Save to file
+        config_path = st.session_state.rule_loader.rules_config_path
+        with open(config_path, 'w') as f:
+            json.dump(rules_data, f, indent=2)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error saving validation rules: {e}")
+        return False
+
 def show_template_rule_overview(rule_set: Dict[str, Any]):
     """Show an overview of all rules for a template"""
     template_id = rule_set.get("template_id", "Unknown Template")
