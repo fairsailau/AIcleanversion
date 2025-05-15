@@ -1,16 +1,16 @@
 """
-Category-Template specific rule functions for integration with rule_builder.py.
+Template-specific rule functions for integration with rule_builder.py.
 This contains the implementation for working with validation rules that apply
-to specific document category and metadata template combinations.
+to specific metadata templates.
 """
 
 import streamlit as st
 import pandas as pd
 from typing import Dict, Any
+import json
 
-def show_category_template_rule_overview(rule_set: Dict[str, Any]):
-    """Show an overview of all rules for a category-template combination"""
-    category = rule_set.get("category", "Unknown Category")
+def show_template_rule_overview(rule_set: Dict[str, Any]):
+    """Show an overview of all rules for a template"""
     template_id = rule_set.get("template_id", "Unknown Template")
     
     # Get template name for display
@@ -19,8 +19,7 @@ def show_category_template_rule_overview(rule_set: Dict[str, Any]):
         template = st.session_state.metadata_templates[template_id]
         template_name = template.get("displayName", template_id)
     
-    st.header(f"Rules for Category: {category}")
-    st.subheader(f"Template: {template_name}")
+    st.header(f"Rules for Template: {template_name}")
     
     # Get template fields if available
     template_fields = []
@@ -546,76 +545,70 @@ def edit_category_template_cross_field_rule(rule_set: Dict[str, Any]):
             st.session_state.is_editing_rule = False
             st.rerun()
 
-def manage_category_template_rules():
-    """Main entry point for managing validation rules for category-template combinations."""
-    st.subheader("Category-Template Rules")
-    st.write("Manage validation rules specific to document category and metadata template combinations.")
+def manage_template_rules():
+    """Main entry point for managing validation rules for templates."""
+    st.subheader("Template Rules")
+    st.write("Manage validation rules specific to metadata templates.")
     
     # Initialize the rule loader if it's not already in the session state
     if 'rule_loader' not in st.session_state:
         from modules.validation_engine import ValidationRuleLoader
         st.session_state.rule_loader = ValidationRuleLoader(rules_config_path='config/validation_rules.json')
     
-    # Get document categories
-    categories = []
-    try:
-        # Get category information from session state
-        categories = []
-        if 'document_types' in st.session_state:
-            categories = [{'name': doc_type, 'description': ''} 
-                        for doc_type in st.session_state.document_types]
-    except Exception as e:
-        st.error(f"Error loading document categories: {e}")
+    # Initialize validation_rules in session state if not present
+    if 'validation_rules' not in st.session_state:
+        if hasattr(st.session_state.rule_loader, 'rules'):
+            st.session_state.validation_rules = st.session_state.rule_loader.rules
+        else:
+            st.session_state.validation_rules = {"template_rules": []}
     
     # Get metadata templates
     templates = []
     if 'metadata_templates' in st.session_state:
         templates = list(st.session_state.metadata_templates.items())
     
-    # Allow user to select category and template
-    col1, col2 = st.columns(2)
+    if not templates:
+        st.warning("No metadata templates found. Please configure metadata templates first.")
+        return
     
-    with col1:
-        selected_category = st.selectbox(
-            "Select Document Category",
-            options=[cat.get("name") for cat in categories],
-            index=0 if categories else None
-        )
+    # Allow user to select template
+    selected_template = st.selectbox(
+        "Select Metadata Template",
+        options=[f"{template[1].get('displayName', template[0])} ({template[0]})" for template in templates],
+        index=0 if templates else None
+    )
     
-    with col2:
-        selected_template = st.selectbox(
-            "Select Metadata Template",
-            options=[f"{template[1].get('displayName', template[0])} ({template[0]})" for template in templates],
-            index=0 if templates else None
-        )
-    
-    if selected_category and selected_template:
+    if selected_template:
         # Extract template_id from the selection string
         template_id = selected_template.split("(")[-1].rstrip(")")
         
         # Get existing rule set or create new one
-        rule_set = st.session_state.rule_loader.get_rules_for_category_template(selected_category, template_id)
+        template_rules = []
+        if "template_rules" in st.session_state.validation_rules:
+            template_rules = st.session_state.validation_rules["template_rules"]
         
-        if not rule_set:
-            st.info(f"No rules found for category '{selected_category}' and template '{template_id}'. Creating new rule set.")
-            rule_set = {
-                "category": selected_category,
+        template_rule = next((rule for rule in template_rules if rule.get("template_id") == template_id), None)
+        
+        if not template_rule:
+            # Create new rule set for this template
+            template_rule = {
                 "template_id": template_id,
                 "fields": [],
-                "mandatory_fields": [],
-                "cross_field_rules": []
+                "mandatory_fields": []
             }
+            template_rules.append(template_rule)
+            st.session_state.validation_rules["template_rules"] = template_rules
         
         # Show the rule set overview
-        show_category_template_rule_overview(rule_set)
+        show_template_rule_overview(template_rule)
     else:
-        st.warning("Please select both a document category and a metadata template to manage rules.")
+        st.warning("Please select a metadata template to manage rules.")
     
-    # Add button to create a new category-template rule set
-    if st.button("Save Category-Template Rules"):
+    # Add button to save rules
+    if st.button("Save Template Rules"):
         try:
-            st.session_state.rule_loader.save_rules()
-            st.success("Category-template rules saved successfully.")
+            save_validation_rules(st.session_state.validation_rules)
+            st.success("Template rules saved successfully.")
         except Exception as e:
             st.error(f"Error saving rules: {e}")
 
