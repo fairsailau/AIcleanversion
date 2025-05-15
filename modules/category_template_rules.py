@@ -614,3 +614,8 @@ def manage_template_rules():
 
 # Note: Main entry point functions are now defined in rule_builder.py
 # This file is only for category-template specific rule management functions
+
+# Backward compatibility function to avoid import errors in deployment
+def manage_category_template_rules():
+    """Backward compatibility wrapper for manage_template_rules"""
+    return manage_template_rules()
