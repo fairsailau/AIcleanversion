@@ -5,41 +5,40 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 from modules.validation_engine import ValidationRuleLoader
 from modules.metadata_template_retrieval import get_metadata_templates
-from modules.category_template_rules import manage_category_template_rules
-
-# Get document categories from session state or config
-def get_document_categories():
-    """Get available document categories"""
-    categories = []
-    
-    # Check session state first
-    if 'document_types' in st.session_state:
-        # Use document types from configuration
-        return [{'name': doc_type, 'description': ''} for doc_type in st.session_state.document_types]
-    
-    # If no categories in session state, try to read from validation rules
-    if 'rule_loader' in st.session_state and hasattr(st.session_state.rule_loader, 'rules'):
-        doc_types = []
-        for rule_set in st.session_state.rule_loader.rules.get('category_template_rules', []):
-            if 'category' in rule_set and rule_set['category'] not in [cat.get('name') for cat in categories]:
-                categories.append({
-                    'name': rule_set['category'],
-                    'description': ''
-                })
-    
-    # If still no categories, return some defaults
-    if not categories:
-        categories = [
-            {'name': 'Invoice', 'description': 'Invoice documents'},
-            {'name': 'Contract', 'description': 'Contract documents'},
-            {'name': 'Receipt', 'description': 'Receipt documents'}
-        ]
-    
-    return categories
+# Import the template-based rule functions
+from modules.category_template_rules import manage_template_rules, show_template_rule_overview, save_validation_rules
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Initialize common resources
+def initialize_rule_builder():
+    """Initialize resources needed for the rule builder"""
+    # Initialize rule loader
+    if 'rule_loader' not in st.session_state:
+        st.session_state.rule_loader = ValidationRuleLoader(rules_config_path='config/validation_rules.json')
+        if hasattr(st.session_state.rule_loader, 'rules'):
+            st.session_state.validation_rules = st.session_state.rule_loader.rules
+        else:
+            st.session_state.validation_rules = {"template_rules": []}
+    
+    # Load metadata templates if not already loaded
+    if 'metadata_templates' not in st.session_state:
+        try:
+            templates = get_metadata_templates()
+            st.session_state.metadata_templates = templates
+        except Exception as e:
+            st.error(f"Error loading metadata templates: {e}")
+            st.session_state.metadata_templates = {}
+            
+    # Initialize UI state variables if needed
+    if 'is_editing_rule' not in st.session_state:
+        st.session_state.is_editing_rule = False
+    if 'editing_field_key' not in st.session_state:
+        st.session_state.editing_field_key = None
+    if 'editing_rule_index' not in st.session_state:
+        st.session_state.editing_rule_index = -1
 
 # Constants for rule types
 FIELD_RULE_TYPES = {
@@ -85,41 +84,12 @@ FIELD_RULE_TYPES = {
     }
 }
 
-# Cross-field rule types
-CROSS_FIELD_RULE_TYPES = {
-    "dependent_existence": {
-        "label": "Dependent Field Existence",
-        "description": "When one field has a specific value, another field must exist",
-        "params": ["dependent_field", "trigger_field", "trigger_value"],
-        "param_descriptions": {
-            "dependent_field": "Field that must exist",
-            "trigger_field": "Field to check for trigger value",
-            "trigger_value": "Value that requires dependent field to exist"
-        }
-    },
-    "date_order": {
-        "label": "Date Order",
-        "description": "Ensure that one date field is before or after another date field",
-        "params": ["date_a_key", "date_b_key", "format"],
-        "param_descriptions": {
-            "date_a_key": "First date field",
-            "date_b_key": "Second date field",
-            "format": "Date format (e.g., %Y-%m-%d)"
-        }
-    }
-}
-
 def format_rule_for_display(rule, rule_type="field"):
     """Format a rule for display in the UI"""
     rule_type_str = rule.get("type", "unknown")
     
-    if rule_type == "field":
-        rule_types_dict = FIELD_RULE_TYPES
-    else:  # cross_field
-        rule_types_dict = CROSS_FIELD_RULE_TYPES
-    
-    if rule_type_str in rule_types_dict:
-        rule_info = rule_types_dict[rule_type_str]
+    if rule_type_str in FIELD_RULE_TYPES:
+        rule_info = FIELD_RULE_TYPES[rule_type_str]
         display_parts = [rule_info.get("label", rule_type_str)]
         
         # Add params
@@ -139,85 +109,21 @@ def show_rule_builder():
     show_rule_overview()
 
 def show_rule_overview():
-    """Main entry point for the Rule Builder - allows selecting between document type rules and category-template rules"""
-    st.write("Welcome to the Rule Builder. Here you can manage validation rules for different document types and category-template combinations.")
+    """Main entry point for the Rule Builder"""
+    st.title('Rule Builder')
+    st.write('Create and manage validation rules for metadata templates.')
     
-    # Initialize the rule loader if it's not already in the session state
-    if 'rule_loader' not in st.session_state:
-        st.session_state.rule_loader = ValidationRuleLoader(rules_config_path='config/validation_rules.json')
+    # Initialize resources needed for the rule builder
+    initialize_rule_builder()
     
-    # Create tabs for the different rule types
-    doc_type_tab, category_template_tab = st.tabs(["Document Type Rules", "Category-Template Rules"])
-    
-    with doc_type_tab:
-        show_document_type_rules()
-    
-    with category_template_tab:
-        # Call the category-template rules management function
-        manage_category_template_rules()
-
-def show_document_type_rules():
-    """Show UI for selecting and managing document type rules"""
-    st.subheader("Document Type Rules")
-    
-    # Load available document types
-    doc_types = []
-    try:
-        # Try to get document types from the validation rules
-        if 'rule_loader' in st.session_state:
-            doc_types = st.session_state.rule_loader.get_document_types()
-        
-        if not doc_types:
-            st.warning("No document types found in validation rules. Please add one first.")
-    except Exception as e:
-        st.error(f"Error loading document types: {e}")
-        return
-    
-    # Create a dropdown to select document type
-    selected_doc_type_name = st.selectbox(
-        "Select Document Type",
-        options=[doc_type.get("name", "Unknown") for doc_type in doc_types],
-        index=0 if doc_types else None
-    )
-    
-    if selected_doc_type_name and doc_types:
-        # Find the selected document type
-        selected_doc_type = next((dt for dt in doc_types if dt.get("name") == selected_doc_type_name), None)
-        
-        if selected_doc_type:
-            # Show the rules for the selected document type
-            show_doc_type_rule_details(selected_doc_type)
-        else:
-            st.warning(f"Document type '{selected_doc_type_name}' not found in the rules.")
-    
-    # Add button to create a new document type
-    if st.button("Add New Document Type"):
-        st.session_state.show_add_doc_type = True
-    
-    if st.session_state.get("show_add_doc_type", False):
-        with st.form("add_doc_type_form"):
-            new_doc_type_name = st.text_input("New Document Type Name")
-            submitted = st.form_submit_button("Create Document Type")
-            
-            if submitted and new_doc_type_name:
-                # Add the new document type
-                try:
-                    st.session_state.rule_loader.add_document_type(new_doc_type_name)
-                    st.success(f"Document type '{new_doc_type_name}' created successfully.")
-                    st.session_state.show_add_doc_type = False
-                    st.experimental_rerun()
-                except Exception as e:
-                    st.error(f"Error creating document type: {e}")
-
-def show_doc_type_rule_details(doc_type):
-    """Show the details of rules for a specific document type"""
-    st.header(f"Rules for Document Type: {doc_type.get('name', 'Unknown')}")
+    # Manage template rules
+    manage_template_rules()
     
     # Display Field Rules
     st.subheader("Field Rules")
     field_rules_data = []
     
-    for field_def in doc_type.get("fields", []):
+    for field_def in template_rule.get("fields", []):
         field_key = field_def.get("key", "unknown")
         field_rules = field_def.get("rules", [])
         
@@ -226,7 +132,7 @@ def show_doc_type_rule_details(doc_type):
                 "Field": field_key,
                 "Rule Type": "No rules defined",
                 "Description": "",
-                "Field Index": doc_type.get("fields", []).index(field_def),
+                "Field Index": template_rule.get("fields", []).index(field_def),
                 "Rule Index": -1
             })
         else:
@@ -235,7 +141,7 @@ def show_doc_type_rule_details(doc_type):
                     "Field": field_key,
                     "Rule Type": rule.get("type", "unknown"),
                     "Description": format_rule_for_display(rule),
-                    "Field Index": doc_type.get("fields", []).index(field_def),
+                    "Field Index": template_rule.get("fields", []).index(field_def),
                     "Rule Index": i
                 })
     
@@ -248,13 +154,13 @@ def show_doc_type_rule_details(doc_type):
         col1, col2 = st.columns(2)
         with col1:
             # Select field
-            field_options = [field.get("key", "unknown") for field in doc_type.get("fields", [])]
+            field_options = [field.get("key", "unknown") for field in template_rule.get("fields", [])]
             if field_options:
                 selected_field = st.selectbox("Select Field", options=field_options)
-                selected_field_idx = next((i for i, f in enumerate(doc_type.get("fields", [])) 
+                selected_field_idx = next((i for i, f in enumerate(template_rule.get("fields", [])) 
                                           if f.get("key") == selected_field), 0)
             else:
-                st.warning("No fields found for this document type. Add fields first.")
+                st.warning("No fields found for this template rule. Add fields first.")
                 selected_field = None
                 selected_field_idx = -1
         
@@ -283,8 +189,8 @@ def show_doc_type_rule_details(doc_type):
                             **param_values
                         }
                         
-                        # Get the document type's fields
-                        fields = doc_type.get("fields", [])
+                        # Get the template rule's fields
+                        fields = template_rule.get("fields", [])
                         
                         # Add rule to the selected field
                         if selected_field_idx >= 0 and selected_field_idx < len(fields):
@@ -302,11 +208,11 @@ def show_doc_type_rule_details(doc_type):
                     except Exception as e:
                         st.error(f"Error adding rule: {e}")
     else:
-        st.info("No field rules defined for this document type. Add a rule by selecting a field and rule type below.")
+        st.info("No field rules defined for this template rule. Add a rule by selecting a field and rule type below.")
     
     # Display Mandatory Fields
     st.subheader("Mandatory Fields")
-    mandatory_fields = doc_type.get("mandatory_fields", [])
+    mandatory_fields = template_rule.get("mandatory_fields", [])
     if mandatory_fields:
         st.write("The following fields are mandatory:")
         for field in mandatory_fields:
