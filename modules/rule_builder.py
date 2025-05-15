@@ -5,8 +5,37 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 from modules.validation_engine import ValidationRuleLoader
 from modules.metadata_template_retrieval import get_metadata_templates
-from modules.document_categorization import get_document_categories
 from modules.category_template_rules import manage_category_template_rules
+
+# Get document categories from session state or config
+def get_document_categories():
+    """Get available document categories"""
+    categories = []
+    
+    # Check session state first
+    if 'document_types' in st.session_state:
+        # Use document types from configuration
+        return [{'name': doc_type, 'description': ''} for doc_type in st.session_state.document_types]
+    
+    # If no categories in session state, try to read from validation rules
+    if 'rule_loader' in st.session_state and hasattr(st.session_state.rule_loader, 'rules'):
+        doc_types = []
+        for rule_set in st.session_state.rule_loader.rules.get('category_template_rules', []):
+            if 'category' in rule_set and rule_set['category'] not in [cat.get('name') for cat in categories]:
+                categories.append({
+                    'name': rule_set['category'],
+                    'description': ''
+                })
+    
+    # If still no categories, return some defaults
+    if not categories:
+        categories = [
+            {'name': 'Invoice', 'description': 'Invoice documents'},
+            {'name': 'Contract', 'description': 'Contract documents'},
+            {'name': 'Receipt', 'description': 'Receipt documents'}
+        ]
+    
+    return categories
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
