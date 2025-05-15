@@ -1,69 +1,144 @@
 import streamlit as st
-import time
-import logging
 import pandas as pd
-from typing import List, Dict, Any, Optional, Tuple
+import logging
+import os
+import time
+import random
 import json
-import concurrent.futures
-import matplotlib.pyplot as plt  # Add matplotlib import for visualizations
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+from typing import Dict, List, Any, Optional, Tuple
+from datetime import datetime
+from modules.metadata_extraction import MetadataExtractor
+from modules.validation_engine import ValidationRuleLoader, Validator
+from modules.confidence_adjustment import ConfidenceAdjuster
+
 logger = logging.getLogger(__name__)
-from .metadata_extraction import get_extraction_functions
-from .direct_metadata_application_v3_fixed import apply_metadata_to_file_direct_worker, parse_template_id, get_template_schema
-from .validation_engine import ValidationRuleLoader, Validator, ConfidenceAdjuster
 
-def get_template_id_for_file(file_id: str, file_doc_type: Optional[str], session_state: Dict[str, Any]) -> Optional[str]:
-    """Determines the template ID for a file based on config and categorization."""
-    metadata_config = session_state.get('metadata_config', {})
-    extraction_method = metadata_config.get('extraction_method', 'freeform')
-    if extraction_method == 'structured':
-        # Correctly access document_type_to_template from the main session_state
-        document_type_to_template_mapping = session_state.get('document_type_to_template', {})
-        if file_doc_type and document_type_to_template_mapping:
-            mapped_template_id = document_type_to_template_mapping.get(file_doc_type)
-            if mapped_template_id:
-                logger.info(f'File ID {file_id} (type {file_doc_type}): Using mapped template {mapped_template_id}')
-                return mapped_template_id
+def map_document_type_to_template(doc_type, template_mappings):
+    """Map a document type to its corresponding metadata template"""
+    # Check if this document type exists in our mappings
+    template_id = template_mappings.get(doc_type)
+    if template_id:
+        logger.info(f"Found template mapping for document type {doc_type}: {template_id}")
+        return template_id
+    
+    # No mapping found, fallback to default
+    logger.warning(f"No template mapping found for document type {doc_type}. Using fallback.")
+    return template_mappings.get("Default")
+
+def get_metadata_template_id(file_id, file_name, template_config):
+    """
+    Determine which metadata template to use for the given file
+    
+    Args:
+        file_id: Box file ID
+        file_name: File name for logging
+        template_config: Configuration containing template selection strategy
+    
+    Returns:
+        template_id: The determined template ID or None if not applicable
+    """
+    template_selection_method = template_config.get("template_selection_method", "direct")
+    logger.debug(f"Template selection method: {template_selection_method}")
+    
+    if template_selection_method == "direct":
+        # Use directly specified template
+        selected_template = template_config.get("metadata_template_id")
+        logger.info(f"Using directly specified template: {selected_template}")
+        return selected_template
+    
+    elif template_selection_method == "document_type_mapping":
+        # First get the document type, then map to template
+        doc_type = None
         
-        global_structured_template_id = metadata_config.get('template_id')
-        if global_structured_template_id:
-            logger.info(f'File ID {file_id}: No specific mapping for type {file_doc_type}. Using global structured template {global_structured_template_id}')
-            return global_structured_template_id
+        # Check if document has been categorized
+        if 'document_categorization' in st.session_state and file_id in st.session_state.document_categorization:
+            categorization_data = st.session_state.document_categorization.get(file_id, {})
+            doc_type = categorization_data.get('category')
+            logger.info(f"Document type from categorization for file {file_name}: {doc_type}")
         
-        logger.warning(f'File ID {file_id}: No template ID found for structured extraction/application (no mapping for type {file_doc_type} and no global template).')
+        if not doc_type:
+            logger.warning(f"No document type found for file {file_name}. Using default.")
+            doc_type = "Default"
+        
+        # Map document type to template
+        template_mappings = template_config.get("template_mappings", {})
+        if not template_mappings:
+            logger.error("No template mappings defined in configuration!")
+            return None
+        
+        template_id = map_document_type_to_template(doc_type, template_mappings)
+        if template_id:
+            logger.info(f"File ID {file_id} (type {doc_type}): Using mapped template {template_id}")
+        else:
+            logger.warning(f"Could not determine template for file {file_name} with type {doc_type}")
+        
+        return template_id
+    
+    else:
+        logger.error(f"Unknown template selection method: {template_selection_method}")
         return None
-    elif extraction_method == 'freeform':
-        # For freeform, a specific template ID might not be relevant in the same way,
-        # but if the logic expects one (e.g., 'global_properties'), it's handled here.
-        logger.info(f"File ID {file_id}: Using 'global_properties' for freeform (as per existing logic).")
-        return 'global_properties' # This was the existing behavior for freeform
-    return None
 
-def get_fields_for_ai_from_template(client: Any, scope: str, template_key: str) -> Optional[List[Dict[str, Any]]]:
-    """Fetches template schema and formats fields for the AI extraction API, including descriptions."""
-    schema_details = get_template_schema(client, scope, template_key)
-    if schema_details and isinstance(schema_details, dict):
+def get_fields_for_ai_from_template(scope, template_key):
+    """
+    Extract field definitions from a Box metadata template to prepare for AI extraction
+    
+    Returns:
+        List of field definitions to pass to AI model
+    """
+    if scope is None or template_key is None:
+        logger.error(f"Invalid scope ({scope}) or template_key ({template_key})")
+        return None
+    
+    # Get schema with descriptions for AI context
+    schema_details = None 
+    
+    # Check if we have a cached schema for this template
+    cache_key = f"{scope}/{template_key}"
+    if 'schema_cache' not in st.session_state:
+        st.session_state.schema_cache = {}
+        
+    if cache_key in st.session_state.schema_cache:
+        logger.info(f"Using cached schema for {cache_key}")
+        schema_details = st.session_state.schema_cache[cache_key]
+    else:
+        # Fetch schema from Box
+        try:
+            client = st.session_state.client
+            schema = client.metadata_template(scope, template_key).get()
+            schema_details = schema
+            
+            # Cache the schema
+            st.session_state.schema_cache[cache_key] = schema_details
+            logger.info(f"Successfully fetched and cached schema (with descriptions) for {cache_key}")
+        except Exception as e:
+            logger.error(f"Error fetching metadata schema {scope}/{template_key}: {e}")
+            return None
+    
+    # Process the schema to extract fields
+    if isinstance(schema_details, dict) and 'fields' in schema_details:
+        # Format this as a clean list for the AI model
         ai_fields = []
-        for field_key, details in schema_details.items():
-            if isinstance(details, dict):
-                # Construct the field object for the AI, ensuring all relevant details are included
-                # The metadata_extraction.py module expects 'key', 'type', 'displayName', and optionally 'description', 'prompt', 'options'
-                field_for_ai = {
-                    'key': field_key,
-                    'type': details.get('type', 'string'), # Default to string if type is missing
-                    'displayName': details.get('displayName', field_key.replace('_', ' ').title())
-                }
-                if 'description' in details and details['description']:
-                    field_for_ai['description'] = details['description']
-                # Add other potential fields if they exist in schema details and are supported by AI call
-                # For example, if schema_details could contain 'prompt' or 'options' for enum
-                if 'prompt' in details:
-                    field_for_ai['prompt'] = details['prompt']
-                if details.get('type') == 'enum' and 'options' in details:
-                    field_for_ai['options'] = details['options']
-                ai_fields.append(field_for_ai)
-            else:
-                logger.warning(f"Skipping field {field_key} in get_fields_for_ai_from_template due to unexpected details format: {details}")
+        for field in schema_details.get('fields', []):
+            field_key = field.get('key')
+            if not field_key:
+                continue  # Skip fields without keys
+                
+            # Only include essential fields for AI extraction
+            field_for_ai = {
+                'key': field_key,
+                'type': field.get('type', 'string'),
+                'displayName': field.get('displayName', field_key)
+            }
+            
+            # Add description if available - helpful context for AI
+            if 'description' in field and field['description']:
+                field_for_ai['description'] = field['description']
+                
+            # If enum, include options
+            details = field
+            if 'options' in details and details['options']:
+                field_for_ai['options'] = details['options']
+            ai_fields.append(field_for_ai)
         return ai_fields
     elif schema_details is None: # Explicitly handle None case (error fetching schema)
         logger.error(f"Schema for {scope}/{template_key} could not be retrieved (returned None).")
@@ -100,517 +175,308 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
         categorization_results = st.session_state.get('document_categorization', {}).get('results', {}) # Corrected to get nested results
         cat_result = categorization_results.get(file_id)
         if cat_result:
-            current_doc_type = cat_result.get('document_type')
-
-        extraction_method = metadata_config.get('extraction_method', 'freeform')
-        extract_func = extraction_functions.get(extraction_method)
-
-        if not extract_func:
-            err_msg = f'No extraction function found for method {extraction_method}. Skipping file {file_name}.'
-            logger.error(err_msg)
-            st.session_state.processing_state['errors'][file_id] = err_msg
-            processed_count += 1
-            st.session_state.processing_state['processed_files'] = processed_count
-            continue
-
+            current_doc_type = cat_result.get('category')
+            logger.debug(f"Found document type for file {file_id}: {current_doc_type}")
+        
         try:
-            extracted_metadata = None
-            if extraction_method == 'structured':
-                # Pass the main st.session_state to get_template_id_for_file
-                target_template_id = get_template_id_for_file(file_id, current_doc_type, st.session_state)
-                if target_template_id:
-                    try:
-                        ext_scope, ext_template_key = parse_template_id(target_template_id)
-                        fields_for_ai = get_fields_for_ai_from_template(client, ext_scope, ext_template_key)
-                        if fields_for_ai:
-                            logger.info(f'File {file_name}: Extracting structured data using template {target_template_id} with fields: {fields_for_ai}')
-                            extracted_metadata = extract_func(client=client, file_id=file_id, fields=fields_for_ai, ai_model=ai_model)
-                        else:
-                            err_msg = f'Could not get fields for template {target_template_id}. Skipping extraction for {file_name}.'
-                            logger.error(err_msg)
-                            st.session_state.processing_state['errors'][file_id] = err_msg
-                    except ValueError as e_parse:
-                        err_msg = f'Invalid template ID format {target_template_id} for extraction: {e_parse}. Skipping {file_name}.'
-                        logger.error(err_msg)
-                        st.session_state.processing_state['errors'][file_id] = err_msg
-                else:
-                    err_msg = f'No target template ID determined for structured extraction for file {file_name}. Skipping.'
-                    logger.error(err_msg)
-                    st.session_state.processing_state['errors'][file_id] = err_msg
+            # Determine target template (if applicable)
+            target_template_id = None
             
-            elif extraction_method == 'freeform':
-                # Get document-specific prompt if available, otherwise global prompt
-                doc_specific_prompts = metadata_config.get('document_type_prompts', {})
-                prompt_to_use = metadata_config.get('freeform_prompt', 'Extract key information.') # Default global prompt
-                if current_doc_type and current_doc_type in doc_specific_prompts:
-                    prompt_to_use = doc_specific_prompts[current_doc_type]
-                    logger.info(f'File {file_name} (type {current_doc_type}): Using specific freeform prompt.')
-                else:
-                    logger.info(f'File {file_name}: Using global freeform prompt.')
+            if processing_mode == 'structured':
+                # For structured mode, we need to have a metadata template
+                target_template_id = get_metadata_template_id(file_id, file_name, metadata_config)
+                if not target_template_id:
+                    logger.error(f"Failed to determine metadata template for file {file_name}. Skipping file.")
+                    continue
                 
-                logger.info(f'File {file_name}: Extracting freeform data with prompt: {prompt_to_use}')
-                extracted_metadata = extract_func(client=client, file_id=file_id, prompt=prompt_to_use, ai_model=ai_model)
-
-            if extracted_metadata:
-                # Check for API errors returned in the metadata itself
-                if isinstance(extracted_metadata, dict) and 'error' in extracted_metadata:
-                    err_msg = f"Error from extraction API for {file_name}: {extracted_metadata['error']}"
-                    logger.error(err_msg)
-                    st.session_state.processing_state['errors'][file_id] = err_msg
+                # Get template key and scope (enterprise_id)
+                template_parts = target_template_id.split('_', 1)
+                if len(template_parts) == 2:
+                    scope = 'enterprise_' + template_parts[0]
+                    template_key = template_parts[1]
                 else:
-                    # This block is for initializing validation components and storing results
-                    if 'rule_loader' not in st.session_state:
-                        st.session_state.rule_loader = ValidationRuleLoader(rules_config_path='config/validation_rules.json')
-                    if 'validator' not in st.session_state:
-                        st.session_state.validator = Validator()
-                    if 'confidence_adjuster' not in st.session_state:
-                        st.session_state.confidence_adjuster = ConfidenceAdjuster()
+                    # Fallback to simple form
+                    scope = 'enterprise'  
+                    template_key = target_template_id
+                
+                # Get fields from template
+                template_fields = get_fields_for_ai_from_template(scope, template_key)
+                if not template_fields:
+                    logger.error(f"Failed to extract fields from template {target_template_id} for file {file_name}. Skipping.")
+                    continue
+                
+                logger.info(f"File {file_name}: Extracting structured data using template {target_template_id} with fields: {template_fields}")
+                
+                # Use appropriate extraction function if available
+                extraction_func = extraction_functions.get('structured')
+                if not extraction_func:
+                    logger.error(f"No extraction function for structured mode. Skipping file {file_name}.")
+                    continue
+                    
+                # Perform the extraction
+                extracted_metadata = extraction_func(file_id=file_id, template_id=target_template_id, template_fields=template_fields)
+                
+                # Validate the extracted metadata
+                
+                doc_category = None
+                if 'document_categorization' in st.session_state and file_id in st.session_state.document_categorization:
+                    doc_category_result = st.session_state.document_categorization.get(file_id, {})
+                    doc_category = doc_category_result.get('category')
+                
+                # Get template ID for validation 
+                # (Note: we already have template_id from earlier, but confirming it's the one we want to use)
+                # This is the template ID that would be used for metadata application
+                template_id_for_validation = target_template_id
+                
+                logger.info(f"Validating with doc_type={current_doc_type}, doc_category={doc_category}, template_id={template_id_for_validation}")
+                
+                # Use the enhanced validation method that supports category-template specific rules
+                validation_output = st.session_state.validator.validate(
+                    ai_response=extracted_metadata, 
+                    doc_type=current_doc_type,
+                    doc_category=doc_category,
+                    template_id=template_id_for_validation
+                )
+                
+                confidence_output = st.session_state.confidence_adjuster.adjust_confidence(extracted_metadata, validation_output)
+                overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
 
-                    if extraction_method == 'structured':
-                        try:
-                            # Get document category from categorization results if available
-                            doc_category = None
-                            if 'document_categorization' in st.session_state and file_id in st.session_state.document_categorization:
-                                doc_category_result = st.session_state.document_categorization.get(file_id, {})
-                                doc_category = doc_category_result.get('category')
-                            
-                            # Get template ID for validation 
-                            # (Note: we already have template_id from earlier, but confirming it's the one we want to use)
-                            # This is the template ID that would be used for metadata application
-                            template_id_for_validation = target_template_id
-                            
-                            logger.info(f"Validating with doc_type={current_doc_type}, doc_category={doc_category}, template_id={template_id_for_validation}")
-                            
-                            # Use the enhanced validation method that supports category-template specific rules
-                            validation_output = st.session_state.validator.validate(
-                                ai_response=extracted_metadata, 
-                                doc_type=current_doc_type,
-                                doc_category=doc_category,
-                                template_id=template_id_for_validation
-                            )
-                            
-                            confidence_output = st.session_state.confidence_adjuster.adjust_confidence(extracted_metadata, validation_output)
-                            overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
+                # --- Restructure results to match results_viewer.py expectations ---
+                # Get the validation rules for mandatory field checks
+                validation_rules = st.session_state.validator.get_rules_for_category_template(
+                    doc_category=doc_category,
+                    template_id=template_id_for_validation
+                )
+                
+                fields_for_ui = {}
+                raw_ai_data = extracted_metadata if isinstance(extracted_metadata, dict) else {}
+                for field_key, ai_field_data in raw_ai_data.items():
+                    value = None
+                    original_ai_confidence_score = 0.0 # Default
+                    original_ai_confidence_qualitative = "Low" # Default
 
-                            # --- Restructure results to match results_viewer.py expectations ---
-                            # Get the validation rules for mandatory field checksn                            validation_rules = st.session_state.validator.get_rules_for_category_template(n                                doc_category=doc_category,n                                template_id=template_id_for_validationn                            )n                                                        fields_for_ui = {}
-                            raw_ai_data = extracted_metadata if isinstance(extracted_metadata, dict) else {}
-                            for field_key, ai_field_data in raw_ai_data.items():
-                                value = None
-                                original_ai_confidence_score = 0.0 # Default
-                                original_ai_confidence_qualitative = "Low" # Default
+                    if isinstance(ai_field_data, dict):
+                        value = ai_field_data.get("value")
+                        original_ai_confidence_score = ai_field_data.get("confidenceScore", 0.0)
+                        if not isinstance(original_ai_confidence_score, (int, float)):
+                            try: original_ai_confidence_score = float(original_ai_confidence_score)
+                            except: original_ai_confidence_score = 0.0
+                    elif isinstance(ai_field_data, (str, int, float, bool)):
+                        value = ai_field_data
+                        original_ai_confidence_score = 0.5 # Assign a neutral default for primitives
+                    
+                    original_ai_confidence_qualitative = st.session_state.confidence_adjuster._get_qualitative_confidence(original_ai_confidence_score)
 
-                                if isinstance(ai_field_data, dict):
-                                    value = ai_field_data.get("value")
-                                    original_ai_confidence_score = ai_field_data.get("confidenceScore", 0.0)
-                                    if not isinstance(original_ai_confidence_score, (int, float)):
-                                        try: original_ai_confidence_score = float(original_ai_confidence_score)
-                                        except: original_ai_confidence_score = 0.0
-                                elif isinstance(ai_field_data, (str, int, float, bool)):
-                                    value = ai_field_data
-                                    original_ai_confidence_score = 0.5 # Assign a neutral default for primitives
-                                
-                                original_ai_confidence_qualitative = st.session_state.confidence_adjuster._get_qualitative_confidence(original_ai_confidence_score)
+                    # Get validation details with proper defaults
+                    field_validation_details = validation_output.get("field_validations", {}).get(field_key, {"is_valid": True, "status": "skip", "messages": []})
+                    
+                    # Get adjusted confidence with safe handling
+                    field_adjusted_confidence_details = confidence_output.get(field_key, {})
+                    
+                    # Handle different formats of confidence data
+                    adjusted_confidence = original_ai_confidence_qualitative  # Default fallback
+                    
+                    # Check if it's a dictionary with confidence_qualitative
+                    if isinstance(field_adjusted_confidence_details, dict):
+                        if "confidence_qualitative" in field_adjusted_confidence_details:
+                            adjusted_confidence = field_adjusted_confidence_details["confidence_qualitative"]
+                    # Check if it's already a string value
+                    elif isinstance(field_adjusted_confidence_details, str):
+                        adjusted_confidence = field_adjusted_confidence_details
 
-                                # Get validation details with proper defaults
-                                field_validation_details = validation_output.get("field_validations", {}).get(field_key, {"is_valid": True, "status": "skip", "messages": []})
-                                
-                                # Get adjusted confidence with safe handling
-                                field_adjusted_confidence_details = confidence_output.get(field_key, {})
-                                
-                                # Handle different formats of confidence data
-                                adjusted_confidence = original_ai_confidence_qualitative  # Default fallback
-                                
-                                # Check if it's a dictionary with confidence_qualitative
-                                if isinstance(field_adjusted_confidence_details, dict):
-                                    if "confidence_qualitative" in field_adjusted_confidence_details:
-                                        adjusted_confidence = field_adjusted_confidence_details["confidence_qualitative"]
-                                # Check if it's already a string value
-                                elif isinstance(field_adjusted_confidence_details, str):
-                                    adjusted_confidence = field_adjusted_confidence_details
+                    # Build the field data for UI display
+                    fields_for_ui[field_key] = {
+                        "value": value,
+                        "ai_confidence": original_ai_confidence_qualitative,
+                        "validations": field_validation_details.get("messages", []),
+                        "field_validation_status": field_validation_details.get("status", "skip"),
+                        "adjusted_confidence": adjusted_confidence,
+                        "is_mandatory": field_key in validation_rules.get("mandatory_fields", []),
+                        "is_present": value is not None and str(value).strip() != ""
+                    }
 
-                                # Build the field data for UI display
-                                fields_for_ui[field_key] = {
-                                    "value": value,
-                                    "ai_confidence": original_ai_confidence_qualitative,
-                                    "validations": field_validation_details.get("messages", []),
-                                    "field_validation_status": field_validation_details.get("status", "skip"),
-                                    "adjusted_confidence": adjusted_confidence,
-                                    "is_mandatory": field_key in validation_rules.get("mandatory_fields", []),
-                                    "is_present": value is not None and str(value).strip() != ""
-                                }
+                document_summary_for_ui = {
+                    "mandatory_fields_status": validation_output.get("mandatory_check", {}).get("status", "N/A"),
+                    "missing_mandatory_fields": validation_output.get("mandatory_check", {}).get("missing_fields", []),
+                    "overall_document_confidence_suggestion": overall_status_info.get("status", "N/A")
+                }
 
-                            document_summary_for_ui = {
-                                "mandatory_fields_status": validation_output.get("mandatory_check", {}).get("status", "N/A"),
-                                "missing_mandatory_fields": validation_output.get("mandatory_check", {}).get("missing_fields", []),
-                                "overall_document_confidence_suggestion": overall_status_info.get("status", "N/A")
-                            }
-
-                            # Save both in extraction_results and processing_state.results
-                            result_data = {
-                                "file_name": file_name,
-                                "document_type": current_doc_type,
-                                "template_id_used_for_extraction": target_template_id if extraction_method == "structured" else "N/A_Freeform",
-                                "fields": fields_for_ui,
-                                "document_validation_summary": document_summary_for_ui,
-                                "raw_ai_response": extracted_metadata # Keep the original raw response as well
-                            }
-                            st.session_state.extraction_results[file_id] = result_data
-                            st.session_state.processing_state['results'][file_id] = result_data
-                            
-                            logger.info(f'Successfully EXTRACTED, VALIDATED, and STORED structured metadata for {file_name} (ID: {file_id}) in UI-compatible format.')
-                        except Exception as e:
-                            logger.error(f'Error during validation/confidence processing for {file_name}: {str(e)}', exc_info=True)
-                            # Fallback to simpler storage in case of validation error
-                            fields_for_ui_simple = {}
-                            for field_key, value in extracted_metadata.items():
-                                if isinstance(value, dict) and "value" in value:
-                                    fields_for_ui_simple[field_key] = {
-                                        "value": value.get("value"),
-                                        "ai_confidence": "Medium",  # Default
-                                        "validations": [],
-                                        "field_validation_status": "skip",
-                                        "adjusted_confidence": "Medium",
-                                        "is_mandatory": False,
-                                        "is_present": True
-                                    }
-                                else:
-                                    fields_for_ui_simple[field_key] = {
-                                        "value": value,
-                                        "ai_confidence": "Medium",  # Default
-                                        "validations": [],
-                                        "field_validation_status": "skip",
-                                        "adjusted_confidence": "Medium",
-                                        "is_mandatory": False,
-                                        "is_present": True
-                                    }
-                            
-                            result_data = {
-                                "file_name": file_name,
-                                "document_type": current_doc_type,
-                                "template_id_used_for_extraction": target_template_id,
-                                "fields": fields_for_ui_simple,
-                                "document_validation_summary": {
-                                    "mandatory_fields_status": "N/A",
-                                    "missing_mandatory_fields": [],
-                                    "cross_field_status": "N/A",
-                                    "cross_field_results": [],
-                                    "overall_document_confidence_suggestion": "Medium"
-                                },
-                                "raw_ai_response": extracted_metadata
-                            }
-                            st.session_state.extraction_results[file_id] = result_data
-                            st.session_state.processing_state['results'][file_id] = result_data
-                            
-                            logger.warning(f'Used simplified storage for {file_name} due to validation error: {str(e)}')
-                    elif extraction_method == 'freeform':
-                        # For freeform, adapt the structure similarly but with less validation detail
-                        fields_for_ui_freeform = {}
-                        raw_ai_data_freeform = extracted_metadata if isinstance(extracted_metadata, dict) else {}
-                        for field_key, value in raw_ai_data_freeform.items(): # Assuming freeform is simpler key:value
-                            # Skip system fields that shouldn't be shown as extractable data
-                            if field_key in ['ai_agent_info', 'created_at', 'completion_reason', 'answer']:
-                                continue
-                                
-                            fields_for_ui_freeform[field_key] = {
-                                "value": value,
-                                "ai_confidence": "Medium", # Default for freeform data
+                # Save both in extraction_results and processing_state.results
+                if 'extraction_results' not in st.session_state:
+                    st.session_state.extraction_results = {}
+                
+                st.session_state.extraction_results[file_id] = {
+                    "file_id": file_id,
+                    "file_name": file_name,
+                    "file_type": file_data.get("type", "unknown"),  
+                    "document_type": current_doc_type,
+                    "extraction_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "processing_mode": processing_mode,
+                    "target_template_id": target_template_id,
+                    "template_scope": scope if 'scope' in locals() else None,
+                    "template_key": template_key if 'template_key' in locals() else None,
+                    "raw_extraction": extracted_metadata,
+                    "validation_output": validation_output,
+                    "confidence_output": confidence_output,
+                    "fields": fields_for_ui,
+                    "document_summary": document_summary_for_ui
+                }
+                
+                # Add to processing state results for progress tracking
+                if 'results' not in st.session_state.processing_state:
+                    st.session_state.processing_state['results'] = {}
+                
+                st.session_state.processing_state['results'][file_id] = {
+                    "status": "success",
+                    "file_name": file_name, 
+                    "document_type": current_doc_type,
+                    "message": f"Successfully processed {file_name}"
+                }
+                
+            elif processing_mode == 'freeform':
+                # Generic unstructured extraction
+                extraction_func = extraction_functions.get('freeform')
+                if not extraction_func:
+                    logger.error(f"No extraction function for freeform mode. Skipping file {file_name}.")
+                    continue
+                
+                # Perform the extraction
+                extracted_metadata = extraction_func(file_id=file_id)
+                
+                # Build a simpler UI structure for freeform results
+                fields_for_ui_simple = {}
+                if isinstance(extracted_metadata, dict):
+                    for field_key, value in extracted_metadata.items():
+                        if isinstance(value, dict) and "value" in value:
+                            # Handle structured response format
+                            fields_for_ui_simple[field_key] = {
+                                "value": value.get("value"),
+                                "ai_confidence": "Medium", 
                                 "validations": [],
                                 "field_validation_status": "skip",
                                 "adjusted_confidence": "Medium",
                                 "is_mandatory": False,
-                                "is_present": value is not None and str(value).strip() != ""
+                                "is_present": True
                             }
-
-                        result_data = {
-                            "file_name": file_name,
-                            "document_type": current_doc_type,
-                            "template_id_used_for_extraction": "N/A_Freeform",
-                            "fields": fields_for_ui_freeform,
-                            "document_validation_summary": { # Minimal summary for freeform
-                                "mandatory_fields_status": "N/A",
-                                "missing_mandatory_fields": [],
-                                "cross_field_status": "N/A",
-                                "cross_field_results": [],
-                                "overall_document_confidence_suggestion": "Medium"
-                            },
-                            "raw_ai_response": extracted_metadata
-                        }
-                        st.session_state.extraction_results[file_id] = result_data
-                        st.session_state.processing_state['results'][file_id] = result_data
-                        
-                        logger.info(f'Successfully EXTRACTED and STORED freeform metadata for {file_name} (ID: {file_id}) in UI-compatible format.')
-            elif file_id not in st.session_state.processing_state['errors']:
-                st.session_state.processing_state['errors'][file_id] = 'Extraction returned no data and no specific error.'
-                logger.warning(f'Extraction returned no data for {file_name} (ID: {file_id}).')
-
-        except Exception as e_extract:
-            err_msg = f'Error during metadata extraction for {file_name} (ID: {file_id}): {str(e_extract)}'
-            logger.error(err_msg, exc_info=True)
-            st.session_state.processing_state['errors'][file_id] = err_msg
-        
-        processed_count += 1
-        st.session_state.processing_state['processed_files'] = processed_count
-
-    st.session_state.processing_state['is_processing'] = False
-    # Fixed f-string expressions by removing backslashes within expressions
-    logger.info(f"FINAL CHECK before exiting process_files_with_progress: st.session_state.extraction_results contains {len(st.session_state.get('extraction_results', {}))} items.")
-    logger.debug(f"FINAL CHECK content of extraction_results: {json.dumps(st.session_state.get('extraction_results', {}), indent=2, default=str)}")
-    logger.info("Metadata extraction process finished for all selected files.")
-    st.rerun()
-
-def process_files():
-    """
-    Main Streamlit page function for processing files.
-    Handles UI, configuration, and orchestrates extraction and application.
-    """
-    st.title('Process Files')
-
-    # Initialize necessary session state variables if they don't exist
-    if 'debug_info' not in st.session_state: st.session_state.debug_info = []
-    if 'metadata_templates' not in st.session_state: st.session_state.metadata_templates = {}
-    if 'feedback_data' not in st.session_state: st.session_state.feedback_data = {}
-    if 'extraction_results' not in st.session_state: st.session_state.extraction_results = {}
-    if 'document_categorization_results' not in st.session_state: st.session_state.document_categorization_results = {}
-    if 'processing_state' not in st.session_state:
-        st.session_state.processing_state = {
-            'is_processing': False, 'processed_files': 0, 
-            'total_files': len(st.session_state.get('selected_files', [])),
-            'current_file_index': -1, 'current_file': '', 
-            'results': {}, 'errors': {}, 'retries': {}, 
-            'max_retries': 3, 'retry_delay': 2, 
-            'visualization_data': {}, 'metadata_applied_status': {}
-        }
-
-    try:
-        if not st.session_state.get('authenticated') or not st.session_state.get('client'):
-            st.error('Please authenticate with Box first.')
-            if st.button('Go to Login'):
-                st.session_state.current_page = 'Home'
-                st.rerun()
-            return
-
-        client = st.session_state.client # Ensure client is available
-
-        if not st.session_state.get('selected_files'):
-            st.warning('No files selected. Please select files in the File Browser first.')
-            if st.button('Go to File Browser', key='go_to_file_browser_button_proc'):
-                st.session_state.current_page = 'File Browser'
-                st.rerun()
-            return
-
-        metadata_config_state = st.session_state.get('metadata_config', {})
-        # Check if structured extraction is chosen but no global template is set (custom fields are not yet fully supported for extraction part)
-        is_structured_incomplete = (
-            metadata_config_state.get('extraction_method') == 'structured' and 
-            not metadata_config_state.get('template_id') and 
-            not any(st.session_state.get('document_type_to_template', {}).values()) # Check if any per-type mapping exists
-        )
-
-        if not metadata_config_state or (metadata_config_state.get('extraction_method') == 'structured' and not metadata_config_state.get('template_id') and not any(st.session_state.get('document_type_to_template',{}).values())):
-            st.warning('Metadata configuration is incomplete. For structured extraction, please ensure a global template is selected or document types are mapped to templates.')
-            if st.button('Go to Metadata Configuration', key='go_to_metadata_config_button_proc'):
-                st.session_state.current_page = 'Metadata Configuration'
-                st.rerun()
-            return
-
-        st.write(f"Ready to process {len(st.session_state.selected_files)} files.")
-
-        with st.expander('Batch Processing Controls'):
-            col1, col2 = st.columns(2)
-            with col1:
-                batch_size = st.number_input('Batch Size', min_value=1, max_value=50, value=metadata_config_state.get('batch_size', 5), key='batch_size_input_proc')
-                st.session_state.metadata_config['batch_size'] = batch_size # Update config directly
-                max_retries = st.number_input('Max Retries', min_value=0, max_value=10, value=st.session_state.processing_state.get('max_retries', 3), key='max_retries_input_proc')
-                st.session_state.processing_state['max_retries'] = max_retries
-            with col2:
-                retry_delay = st.number_input('Retry Delay (s)', min_value=1, max_value=30, value=st.session_state.processing_state.get('retry_delay', 2), key='retry_delay_input_proc')
-                st.session_state.processing_state['retry_delay'] = retry_delay
+                        else:
+                            fields_for_ui_simple[field_key] = {
+                                "value": value,
+                                "ai_confidence": "Medium", 
+                                "validations": [],
+                                "field_validation_status": "skip",
+                                "adjusted_confidence": "Medium",
+                                "is_mandatory": False,
+                                "is_present": True
+                            }
                 
-                processing_mode = st.selectbox('Processing Mode', options=['Sequential', 'Parallel'], index=0, key='processing_mode_input_proc', help='Parallel processing is experimental.')
-                st.session_state.processing_state['processing_mode'] = processing_mode
-        
-        auto_apply_metadata = st.checkbox('Automatically apply metadata after extraction', value=st.session_state.processing_state.get('auto_apply_metadata', True), key='auto_apply_metadata_checkbox_proc')
-        st.session_state.processing_state['auto_apply_metadata'] = auto_apply_metadata
-
-        col_start, col_cancel = st.columns(2)
-        with col_start:
-            start_button = st.button('Start Processing', disabled=st.session_state.processing_state.get('is_processing', False), use_container_width=True, key='start_processing_button_proc')
-        with col_cancel:
-            cancel_button = st.button('Cancel Processing', disabled=not st.session_state.processing_state.get('is_processing', False), use_container_width=True, key='cancel_processing_button_proc')
-
-        progress_bar_placeholder = st.empty()
-        status_text_placeholder = st.empty()
-
-        if start_button:
-            st.session_state.processing_state.update({
-                'is_processing': True, 'processed_files': 0, 
-                'total_files': len(st.session_state.selected_files),
-                'current_file_index': -1, 'current_file': '', 
-                'results': {}, 'errors': {}, 'retries': {},
-                'max_retries': max_retries, 'retry_delay': retry_delay, 
-                'processing_mode': processing_mode, 
-                'auto_apply_metadata': auto_apply_metadata,
-                'visualization_data': {}, 'metadata_applied_status': {}
-            })
-            st.session_state.extraction_results = {} # Clear previous overall results
-            logger.info('Starting file processing orchestration...')
-            # Call the processing function
-            process_files_with_progress(
-                st.session_state.selected_files, 
-                get_extraction_functions(), 
-                batch_size=batch_size, 
-                processing_mode=processing_mode
-            )
-            # Note: process_files_with_progress will call st.rerun() itself upon completion/cancellation
-
-        if cancel_button and st.session_state.processing_state.get('is_processing', False):
-            st.session_state.processing_state['is_processing'] = False
-            logger.info('Processing cancelled by user via button.')
-            status_text_placeholder.warning('Processing cancelled.')
-            st.rerun() # Rerun to reflect cancelled state
-
-        current_processing_state = st.session_state.processing_state
-        if current_processing_state.get('is_processing', False):
-            processed_files_count = current_processing_state['processed_files']
-            total_files_count = current_processing_state['total_files']
-            current_file_name = current_processing_state['current_file']
-            progress_value = (processed_files_count / total_files_count) if total_files_count > 0 else 0
-            progress_bar_placeholder.progress(progress_value)
-            status_text_placeholder.text(f'Processing {current_file_name}... ({processed_files_count}/{total_files_count})' if current_file_name else f'Processed {processed_files_count}/{total_files_count} files')
-        
-        # Display results summary only if not currently processing and some processing has occurred
-        elif not current_processing_state.get('is_processing', False) and current_processing_state.get('total_files', 0) > 0 and current_processing_state.get('processed_files', 0) == current_processing_state.get('total_files',0):
-            processed_files_count = current_processing_state.get('processed_files', 0)
-            total_files_count = current_processing_state.get('total_files', 0)
-            successful_extractions_count = len(current_processing_state.get('results', {}))
-            extraction_error_count = len(current_processing_state.get('errors', {}))
+                result_data = {
+                    "file_name": file_name,
+                    "file_id": file_id,
+                    "file_type": file_data.get("type", "unknown"),
+                    "document_type": current_doc_type,
+                    "extraction_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "processing_mode": processing_mode,
+                    "raw_extraction": extracted_metadata,
+                    "fields": fields_for_ui_simple,
+                    "document_summary": {
+                        "mandatory_fields_status": "N/A",
+                        "missing_mandatory_fields": [],
+                        "overall_document_confidence_suggestion": "Medium"
+                    }
+                }
+                
+                # Save in session state
+                if 'extraction_results' not in st.session_state:
+                    st.session_state.extraction_results = {}
+                st.session_state.extraction_results[file_id] = result_data
+                
+                # Also save to processing state
+                if 'results' not in st.session_state.processing_state:
+                    st.session_state.processing_state['results'] = {}
+                st.session_state.processing_state['results'][file_id] = {
+                    "status": "success",
+                    "file_name": file_name,
+                    "document_type": current_doc_type,
+                    "message": f"Successfully processed {file_name}"
+                }
             
-            # Check for API errors tracked in session state
-            api_errors = st.session_state.get('api_errors', [])
-            api_error_count = len(api_errors)
-
-            if total_files_count > 0:
-                if successful_extractions_count == total_files_count and extraction_error_count == 0:
-                    st.success(f'Extraction complete! Successfully processed {successful_extractions_count} files.')
-                elif successful_extractions_count > 0:
-                    st.warning(f'Extraction complete! Processed {successful_extractions_count} files successfully, with {extraction_error_count} errors on other files.')
-                elif extraction_error_count > 0:
-                    st.error(f'Extraction failed for {extraction_error_count} files. No files successfully processed.')
-                else: # Should not happen if total_files > 0 and processed_files == total_files
-                    st.info("Processing finished, but no results or errors were recorded.")
-
-                if current_processing_state.get('errors'):
-                    with st.expander('View Extraction Errors', expanded=True if extraction_error_count > 0 else False):
-                        error_data = []
-                        for file_id_err, error_msg_err in current_processing_state['errors'].items():
-                            file_name_err = 'Unknown File'
-                            for f_info in st.session_state.selected_files:
-                                if str(f_info.get('id')) == str(file_id_err):
-                                    file_name_err = f_info.get('name', f'File ID {file_id_err}')
-                                    break
-                            error_data.append({'File Name': file_name_err, 'Error': error_msg_err, 'File ID': file_id_err})
-                        if error_data:
-                            st.table(pd.DataFrame(error_data))
-                        else:
-                            st.write("No extraction errors recorded.")
+            processed_count += 1
+            st.session_state.processing_state['successful_count'] = processed_count
+            logger.info(f"Successfully processed {file_name} - {processed_count}/{total_files}")
             
-                # Show API errors and offer retry capability
-                if api_error_count > 0:
-                    with st.expander("Box API Errors", expanded=True if api_error_count > 0 else False):
-                        st.write(f"Found {api_error_count} errors from Box API calls that might be intermittent.")
-                        
-                        # Show the errors in a table
-                        error_df_data = []
-                        for i, error in enumerate(api_errors):
-                            # Find file name from file_id
-                            file_name = "Unknown File"
-                            file_id = error.get('file_id')
-                            for f_info in st.session_state.selected_files:
-                                if str(f_info.get('id')) == str(file_id):
-                                    file_name = f_info.get('name', f'File ID {file_id}')
-                                    break
-                                    
-                            error_df_data.append({
-                                'Index': i,
-                                'File Name': file_name,
-                                'API': error.get('api', 'Unknown'),
-                                'Error': error.get('error', 'Unknown error'),
-                                'Retries': error.get('retry_count', 0),
-                                'Time': time.strftime('%H:%M:%S', time.localtime(error.get('timestamp', 0)))
-                            })
-                            
-                        if error_df_data:
-                            st.dataframe(pd.DataFrame(error_df_data))
-                            
-                            # Offer retry button
-                            if st.button("Retry Failed API Calls", key="retry_api_errors_btn"):
-                                st.info("Retrying failed API calls...")
-                                # Clear the API errors list as we're going to retry them
-                                retry_errors = st.session_state.api_errors.copy()
-                                st.session_state.api_errors = []
-                                
-                                # Re-add the files to selected_files if they aren't there already
-                                file_ids_to_retry = [error.get('file_id') for error in retry_errors if 'file_id' in error]
-                                file_ids_current = [f.get('id') for f in st.session_state.selected_files]
-                                
-                                # Filter to only retry files that had API errors
-                                files_to_process = [f for f in st.session_state.selected_files if str(f.get('id')) in file_ids_to_retry]
-                                
-                                if files_to_process:
-                                    # Reset processing state for these files
-                                    batch_size = st.session_state.metadata_config.get('batch_size', 5)
-                                    processing_mode = st.session_state.processing_state.get('processing_mode', 'Sequential')
-                                    
-                                    # Clear previous errors for these files
-                                    for file_data in files_to_process:
-                                        file_id = str(file_data.get('id'))
-                                        if file_id in st.session_state.processing_state.get('errors', {}):
-                                            del st.session_state.processing_state['errors'][file_id]
-                                    
-                                    st.session_state.processing_state.update({
-                                        'is_processing': True,
-                                        'processed_files': 0,
-                                        'total_files': len(files_to_process),
-                                        'current_file_index': -1,
-                                        'current_file': ''
-                                    })
-                                    
-                                    # Process just the failed files
-                                    process_files_with_progress(
-                                        files_to_process,
-                                        get_extraction_functions(),
-                                        batch_size=batch_size,
-                                        processing_mode=processing_mode
-                                    )
-                                else:
-                                    st.warning("No files to retry. The files might have been removed from selection.")
-                                    
-                        else:
-                            st.write("No API error details available.")
+        except Exception as e:
+            logger.error(f"Error during validation/confidence processing for {file_name}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             
-            # Visualization of results (example)
-            if successful_extractions_count > 0 or extraction_error_count > 0:
-                st.subheader("Extraction Summary")
-                labels = 'Successful', 'Failed'
-                sizes = [successful_extractions_count, extraction_error_count]
-                colors = ['#4CAF50', '#F44336'] # Green for success, Red for failure
-                explode = (0.1, 0) if successful_extractions_count > 0 and extraction_error_count > 0 else (0,0)
-
-                fig1, ax1 = plt.subplots()
-                ax1.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%',
-                        shadow=True, startangle=90)
-                ax1.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
-                st.pyplot(fig1)
-
-    except Exception as e:
-        logger.error(f"An unexpected error occurred in the Process Files page: {e}", exc_info=True)
-        st.error(f"An unexpected error occurred: {e}")
-        # Optionally add a button to reset state or navigate away
-        if st.button("Reset and Go Home"):
-            # Clear potentially problematic state variables
-            for key_to_clear in ['processing_state', 'extraction_results']:
-                if key_to_clear in st.session_state:
-                    del st.session_state[key_to_clear]
-            st.session_state.current_page = "Home"
-            st.rerun()
+            # Still try to save some minimal metadata for this file
+            # Basic information for failed files - this lets us still display them in the results
+            if 'extraction_results' not in st.session_state:
+                st.session_state.extraction_results = {}
+                
+            # Use raw extraction if available, otherwise empty
+            raw_data = {}
+            try:
+                # Try to get any extracted data we have
+                if 'extracted_metadata' in locals() and extracted_metadata is not None:
+                    raw_data = extracted_metadata
+            except:
+                pass
+                
+            # Build minimal fields display
+            simple_fields = {}
+            if isinstance(raw_data, dict):
+                for field_key, value in raw_data.items():
+                    if isinstance(value, dict) and "value" in value:
+                        value = value.get("value")
+                    
+                    simple_fields[field_key] = {
+                        "value": value,
+                        "ai_confidence": "Low", 
+                        "validations": [],
+                        "field_validation_status": "skip",
+                        "adjusted_confidence": "Low",
+                        "is_mandatory": False,
+                        "is_present": value is not None and str(value).strip() != ""
+                    }
+                
+            result_data = {
+                "file_name": file_name,
+                "file_id": file_id,
+                "file_type": file_data.get("type", "unknown"),
+                "document_type": current_doc_type,
+                "extraction_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "processing_mode": processing_mode,
+                "raw_extraction": raw_data,
+                "error": str(e),
+                "fields": simple_fields,
+                "document_summary": {
+                    "mandatory_fields_status": "N/A",
+                    "missing_mandatory_fields": [],
+                    "overall_document_confidence_suggestion": "Low"
+                }
+            }
+            
+            st.session_state.extraction_results[file_id] = result_data
+            
+            # Add to processing state results for progress tracking
+            if 'results' not in st.session_state.processing_state:
+                st.session_state.processing_state['results'] = {}
+                
+            st.session_state.processing_state['results'][file_id] = {
+                "status": "error",
+                "file_name": file_name,
+                "document_type": current_doc_type,
+                "message": f"Error processing {file_name}: {str(e)}"
+            }
+            
+            # Increment error count
+            error_count = st.session_state.processing_state.get('error_count', 0) + 1
+            st.session_state.processing_state['error_count'] = error_count
+            
+            logger.warning(f"Used simplified storage for {file_name} due to validation error: {e}")
+    
+    # Final check before exiting
+    logger.info(f"FINAL CHECK before exiting process_files_with_progress: st.session_state.extraction_results contains {len(st.session_state.extraction_results)} items.")
+    logger.info(f"Metadata extraction process finished for all selected files.")
+    st.session_state.processing_state['is_processing'] = False
