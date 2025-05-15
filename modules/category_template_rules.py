@@ -559,8 +559,11 @@ def manage_category_template_rules():
     # Get document categories
     categories = []
     try:
-        from modules.document_categorization import get_document_categories
-        categories = get_document_categories()
+        # Get category information from session state
+        categories = []
+        if 'document_types' in st.session_state:
+            categories = [{'name': doc_type, 'description': ''} 
+                        for doc_type in st.session_state.document_types]
     except Exception as e:
         st.error(f"Error loading document categories: {e}")
     
@@ -616,10 +619,5 @@ def manage_category_template_rules():
         except Exception as e:
             st.error(f"Error saving rules: {e}")
 
-# These functions need to be imported into rule_builder.py and referenced from there
-# The main entry point functions can remain in rule_builder.py
-
-def show_rule_builder():
-    """Main entry point for the rule builder page - This should be in rule_builder.py"""
-    from modules.rule_builder import rule_builder_page
-    rule_builder_page()
+# Note: Main entry point functions are now defined in rule_builder.py
+# This file is only for category-template specific rule management functions
