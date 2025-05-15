@@ -29,7 +29,7 @@ from modules.results_viewer import view_results
 from modules.direct_metadata_application_v3_fixed import apply_metadata_direct as apply_metadata
 from modules.document_categorization import document_categorization
 from modules.metadata_template_retrieval import get_metadata_templates, initialize_template_state
-from modules.rule_builder import show_rule_builder
+from modules.rule_builder import show_rule_overview
 # Import the modified horizontal workflow component (now visual only)
 from modules.horizontal_workflow import display_horizontal_workflow
 # Optionally re-add user journey guide if needed later
