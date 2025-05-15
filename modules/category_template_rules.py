@@ -95,18 +95,13 @@ def save_validation_rules(rules_data):
 
 def show_template_rule_overview(rule_set: Dict[str, Any]):
     """Show an overview of all rules for a template"""
-    template_id = rule_set.get("template_id", "Unknown Template")
+    template_id = rule_set.get("template_id")
+    template_fields = rule_set.get("fields", [])
+    mandatory_fields = rule_set.get("mandatory_fields", [])
     
-    # Get template name for display
-    template_name = template_id
-    if "metadata_templates" in st.session_state and template_id in st.session_state.metadata_templates:
-        template = st.session_state.metadata_templates[template_id]
-        template_name = template.get("displayName", template_id)
+    st.subheader(f"Rules for Template: {template_id}")
     
-    st.header(f"Rules for Template: {template_name}")
-    
-    # Get template fields if available
-    template_fields = []
+    # Field Rules Section
     template_field_objects = []
     if "metadata_templates" in st.session_state and template_id in st.session_state.metadata_templates:
         template = st.session_state.metadata_templates[template_id]
