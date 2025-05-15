@@ -8,8 +8,8 @@
           "rules": []
         }
       ],
-      "mandatory_fields": [],
-      "cross_field_rules": []
+      "mandatory_fields": []
     }
-  ]
+  ],
+  "template_rules": []
 }
