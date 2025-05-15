@@ -168,8 +168,27 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
 
                     if extraction_method == 'structured':
                         try:
-                            rules = st.session_state.rule_loader.get_rules_for_doc_type(current_doc_type)
-                            validation_output = st.session_state.validator.validate(extracted_metadata, rules, current_doc_type)
+                            # Get document category from categorization results if available
+                            doc_category = None
+                            if 'document_categorization' in st.session_state and file_id in st.session_state.document_categorization:
+                                doc_category_result = st.session_state.document_categorization.get(file_id, {})
+                                doc_category = doc_category_result.get('category')
+                            
+                            # Get template ID for validation 
+                            # (Note: we already have template_id from earlier, but confirming it's the one we want to use)
+                            # This is the template ID that would be used for metadata application
+                            template_id_for_validation = template_id
+                            
+                            logger.info(f"Validating with doc_type={current_doc_type}, doc_category={doc_category}, template_id={template_id_for_validation}")
+                            
+                            # Use the enhanced validation method that supports category-template specific rules
+                            validation_output = st.session_state.validator.validate(
+                                ai_response=extracted_metadata, 
+                                doc_type=current_doc_type,
+                                doc_category=doc_category,
+                                template_id=template_id_for_validation
+                            )
+                            
                             confidence_output = st.session_state.confidence_adjuster.adjust_confidence(extracted_metadata, validation_output)
                             overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
 

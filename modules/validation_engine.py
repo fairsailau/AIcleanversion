@@ -45,6 +45,39 @@ class ValidationRuleLoader:
             
         logger.warning(f"No validation rules found for document type '{doc_type_name}' or 'Default'. Returning empty rules.")
         return {"fields": [], "mandatory_fields": [], "cross_field_rules": []}
+        
+    def get_rules_for_category_template(self, doc_category: Optional[str], template_id: Optional[str]) -> Dict[str, Any]:
+        """Get validation rules for a specific document category and metadata template combination
+        
+        Args:
+            doc_category: Document category (from document categorization)
+            template_id: Metadata template ID (from metadata template selection)
+            
+        Returns:
+            Dict containing the validation rules specific to this category-template combination
+        """
+        if not doc_category or not template_id:
+            logger.debug("Missing category or template ID, cannot get category-template specific rules")
+            return {"fields": [], "mandatory_fields": [], "cross_field_rules": []}
+        
+        # Load the full ruleset to access the category_template_rules
+        try:
+            with open(self.rules_config_path, 'r') as f:
+                full_config = json.load(f)
+                category_template_rules = full_config.get("category_template_rules", {})
+        except Exception as e:
+            logger.error(f"Error loading category-template rules: {e}")
+            return {"fields": [], "mandatory_fields": [], "cross_field_rules": []}
+            
+        # Generate the rule ID that would have been used when creating these rules
+        rule_id = f"{doc_category}|{template_id}|base"
+        
+        if rule_id in category_template_rules:
+            logger.debug(f"Found specific rules for category '{doc_category}' with template '{template_id}'")
+            return category_template_rules[rule_id]
+        
+        logger.debug(f"No specific rules found for category '{doc_category}' with template '{template_id}'")
+        return {"fields": [], "mandatory_fields": [], "cross_field_rules": []}
 
 class Validator:
     def __init__(self):
@@ -172,16 +205,40 @@ class Validator:
                         logger.warning(f"Could not compare dates for rule '{rule_name}' due to format issues.")
         return all_passed, failed_rules_details
 
-    def validate(self, ai_response: Dict[str, Any], doc_rules: Dict[str, Any], doc_type: Optional[str]) -> Dict[str, Any]:
-        field_validations = {}
+    def validate(self, ai_response: Dict[str, Any], doc_type: Optional[str] = None, doc_category: Optional[str] = None, template_id: Optional[str] = None) -> Dict[str, Any]:
+        """Validate an AI response against validation rules based on document type and/or category-template combination
+        
+        Args:
+            ai_response: AI extracted metadata to validate
+            doc_type: Document type (e.g., Invoice, Contract, etc.)
+            doc_category: Document category from document categorization (e.g., PII, Financial, etc.)
+            template_id: Metadata template ID
+        
+        Returns:
+            Dict containing validation results
+        """
+        # Load validation rules
+        rules_loader = ValidationRuleLoader("config/validation_rules.json")
+        
+        # First, get rules for the document type
+        doc_rules = rules_loader.get_rules_for_doc_type(doc_type)
+        
+        # Then, get rules specific to the category-template combination
+        category_template_rules = rules_loader.get_rules_for_category_template(doc_category, template_id)
+        
+        # If AI response is not a dict, return validation error
         if not isinstance(ai_response, dict):
-            logger.warning(f"AI response is not a dictionary for doc_type {doc_type}. Cannot perform validation.")
+            logger.warning(f"AI response is not a dictionary. Cannot perform validation.")
             return {
                 "field_validations": {},
                 "mandatory_check": {"status": "Error", "message": "AI response not a dict"},
                 "cross_field_check": {"status": "Error", "message": "AI response not a dict"}
             }
 
+        # Initialize field validations
+        field_validations = {}
+
+        # 1. Validate fields based on document type rules and category-template rules
         for field_key, field_data_item in ai_response.items():
             value_to_validate = None
             if isinstance(field_data_item, dict):
@@ -193,29 +250,71 @@ class Validator:
                 field_validations[field_key] = {"is_valid": False, "messages": ["Unexpected data type from AI for this field."]}
                 continue
 
-            field_specific_rules = []
+            # Get doc type field rules
+            doc_type_field_rules = []
             for fr in doc_rules.get("fields", []):
                 if fr.get("key") == field_key:
-                    field_specific_rules = fr.get("rules", [])
+                    doc_type_field_rules = fr.get("rules", [])
                     break
+            
+            # Get category-template field rules (these take precedence)
+            category_template_field_rules = []
+            for fr in category_template_rules.get("fields", []):
+                if fr.get("key") == field_key:
+                    category_template_field_rules = fr.get("rules", [])
+                    break
+            
+            # Combine rules with category-template rules taking precedence
+            if category_template_field_rules:
+                # If there are specific category-template rules for this field, use only those
+                field_specific_rules = category_template_field_rules
+                logger.debug(f"Using category-template specific rules for field {field_key}")
+            else:
+                # Otherwise use document type rules
+                field_specific_rules = doc_type_field_rules
+                if doc_type_field_rules:
+                    logger.debug(f"Using document type rules for field {field_key}")
+            
+            # Validate field against combined rules
             is_valid, messages = self._validate_field(field_key, value_to_validate, field_specific_rules)
             field_validations[field_key] = {"is_valid": is_valid, "messages": messages}
         
-        mandatory_fields_list = doc_rules.get("mandatory_fields", [])
+        # 2. Check mandatory fields - use the union of both mandatory field lists
+        doc_type_mandatory = doc_rules.get("mandatory_fields", [])
+        category_template_mandatory = category_template_rules.get("mandatory_fields", [])
+        
+        # Combine mandatory fields with deduplication
+        mandatory_fields_list = list(set(doc_type_mandatory + category_template_mandatory))
         mandatory_passed, missing_fields = self._check_mandatory_fields(ai_response, mandatory_fields_list)
+        
         mandatory_check_result = {
             "status": "Passed" if mandatory_passed else "Failed",
             "missing_fields": missing_fields
         }
         
-        cross_field_rules_list = doc_rules.get("cross_field_rules", [])
+        # 3. Check cross-field rules - use both sets of cross-field rules
+        doc_type_cross_rules = doc_rules.get("cross_field_rules", [])
+        category_template_cross_rules = category_template_rules.get("cross_field_rules", [])
+        
+        # Combine cross-field rules
+        cross_field_rules_list = doc_type_cross_rules + category_template_cross_rules
         cross_field_passed, failed_cross_rules = self._check_cross_field_rules(ai_response, cross_field_rules_list)
+        
         cross_field_check_result = {
             "status": "Passed" if cross_field_passed else "Failed",
             "failed_rules": failed_cross_rules
         }
         
-        logger.info(f"Validation for doc_type '{doc_type}': Fields: {field_validations}, Mandatory: {mandatory_check_result}, Cross-field: {cross_field_check_result}")
+        validation_source = ""
+        if doc_type and not (doc_category and template_id):
+            validation_source = f"doc_type '{doc_type}'"
+        elif doc_category and template_id and not doc_type:
+            validation_source = f"category '{doc_category}' + template '{template_id}'"
+        else:
+            validation_source = f"doc_type '{doc_type}' + category '{doc_category}' + template '{template_id}'"
+        
+        logger.info(f"Validation for {validation_source}: Fields: {field_validations}, Mandatory: {mandatory_check_result}, Cross-field: {cross_field_check_result}")
+        
         return {
             "field_validations": field_validations,
             "mandatory_check": mandatory_check_result,
