@@ -177,7 +177,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                             # Get template ID for validation 
                             # (Note: we already have template_id from earlier, but confirming it's the one we want to use)
                             # This is the template ID that would be used for metadata application
-                            template_id_for_validation = template_id
+                            template_id_for_validation = target_template_id
                             
                             logger.info(f"Validating with doc_type={current_doc_type}, doc_category={doc_category}, template_id={template_id_for_validation}")
                             
