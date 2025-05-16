@@ -480,3 +480,131 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
     logger.info(f"FINAL CHECK before exiting process_files_with_progress: st.session_state.extraction_results contains {len(st.session_state.extraction_results)} items.")
     logger.info(f"Metadata extraction process finished for all selected files.")
     st.session_state.processing_state['is_processing'] = False
+
+def process_files():
+    """
+    Streamlit interface for processing files with metadata extraction.
+    This is a wrapper function for process_files_with_progress that handles
+    the Streamlit UI components and configuration.
+    """
+    st.title("Process Files")
+    
+    # Ensure we have the required session state variables
+    if 'selected_files' not in st.session_state or not st.session_state.selected_files:
+        st.warning("Please select files in the File Browser first.")
+        return
+    
+    if 'metadata_config' not in st.session_state:
+        st.warning("Please configure metadata extraction parameters first.")
+        return
+    
+    # Get extraction functions
+    extraction_functions = get_extraction_functions()
+    
+    # Initialize validator and confidence adjuster if not already done
+    if 'validator' not in st.session_state:
+        st.session_state.validator = Validator()
+        st.session_state.rule_loader = ValidationRuleLoader(rules_config_path='config/validation_rules.json')
+        
+    if 'confidence_adjuster' not in st.session_state:
+        st.session_state.confidence_adjuster = ConfidenceAdjuster()
+    
+    # Get configuration
+    metadata_config = st.session_state.metadata_config
+    processing_mode = metadata_config.get('extraction_method', 'freeform')
+    batch_size = metadata_config.get('batch_size', 5)
+    
+    # Initialize or reset processing state
+    if 'processing_state' not in st.session_state:
+        st.session_state.processing_state = {
+            'is_processing': False,
+            'current_file_index': 0,
+            'current_file': "",
+            'total_files': 0,
+            'successful_count': 0,
+            'error_count': 0,
+            'results': {}
+        }
+    
+    # Display status and controls
+    st.subheader("Extraction Status")
+    
+    status_col1, status_col2 = st.columns(2)
+    with status_col1:
+        st.write(f"Files selected for processing: {len(st.session_state.selected_files)}")
+        st.write(f"Extraction method: {processing_mode.capitalize()}")
+        
+        if processing_mode == 'structured':
+            template_map_str = ""
+            if 'template_mappings' in metadata_config:
+                for doc_type, template in metadata_config['template_mappings'].items():
+                    template_map_str += f"- {doc_type}: {template}\n"
+            
+            if template_map_str:
+                with st.expander("Template Mappings"):
+                    st.markdown(template_map_str)
+    
+    with status_col2:
+        if st.session_state.processing_state.get('is_processing', False):
+            # Display progress
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            total_files = st.session_state.processing_state.get('total_files', 0)
+            current_index = st.session_state.processing_state.get('current_file_index', 0)
+            
+            if total_files > 0:
+                progress_bar.progress(min(1.0, current_index / total_files))
+                
+            status_text.write(f"Processing file {current_index + 1} of {total_files}: {st.session_state.processing_state.get('current_file', '')}")
+            
+            # Cancel button
+            if st.button("Cancel Processing"):
+                st.session_state.processing_state['is_processing'] = False
+                st.success("Cancelled processing.")
+                st.rerun()
+        else:
+            # Start button
+            if st.button("Start Processing"):
+                # Reset processing state
+                st.session_state.processing_state = {
+                    'is_processing': True,
+                    'current_file_index': 0,
+                    'current_file': "",
+                    'total_files': len(st.session_state.selected_files),
+                    'successful_count': 0,
+                    'error_count': 0,
+                    'results': {}
+                }
+                
+                # Call the processing function
+                process_files_with_progress(
+                    files_to_process=st.session_state.selected_files,
+                    extraction_functions=extraction_functions,
+                    batch_size=batch_size,
+                    processing_mode=processing_mode
+                )
+                
+                # Update UI
+                st.success(f"Processing complete! Processed {st.session_state.processing_state.get('successful_count', 0)} files successfully.")
+                st.session_state.processing_state['is_processing'] = False
+                time.sleep(1)  # Give a moment for the success message to be visible
+                st.rerun()
+    
+    # Show results summary if available
+    if hasattr(st.session_state, 'extraction_results') and st.session_state.extraction_results:
+        st.subheader("Processing Results Summary")
+        
+        results_df = pd.DataFrame([{
+            "File Name": data.get("file_name", "Unknown"),
+            "Status": st.session_state.processing_state.get('results', {}).get(file_id, {}).get("status", "unknown"),
+            "Document Type": data.get("document_type", "Unknown"),
+            "Field Count": len(data.get("fields", {}))
+        } for file_id, data in st.session_state.extraction_results.items()])
+        
+        st.dataframe(results_df)
+        
+        if st.button("View Detailed Results"):
+            # Navigate to results page
+            st.session_state.page = "View Results"
+            st.rerun()
