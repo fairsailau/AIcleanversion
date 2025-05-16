@@ -304,13 +304,23 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     logger.error(f"No extraction function for structured mode. Skipping file {file_name}.")
                     continue
                     
+                # Get template ID and document type for validation
+                template_id_for_validation, current_doc_type = get_metadata_template_id(file_id, file_name, template_config)
+                
+                # Get document category if available
+                doc_category = None
+                if 'document_categorization' in st.session_state and 'results' in st.session_state.document_categorization:
+                    if file_id in st.session_state.document_categorization['results']:
+                        doc_category_result = st.session_state.document_categorization['results'][file_id]
+                        doc_category = doc_category_result.get('category') or doc_category_result.get('document_type')
+                
                 # Perform the extraction
-                # Fix parameter names to match the function signature in metadata_extraction.py
                 metadata_template = {
                     'scope': scope,
                     'template_key': template_key,
                     'id': target_template_id
                 }
+                
                 extracted_metadata = extraction_func(
                     client=client,
                     file_id=file_id, 
@@ -319,32 +329,12 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     ai_model=ai_model
                 )
                 
-                # Validate the extracted metadata
+                # Ensure extracted_metadata is a dictionary
+                if not isinstance(extracted_metadata, dict):
+                    logger.error(f"Unexpected response format from extraction function: {type(extracted_metadata)}")
+                    extracted_metadata = {}
                 
-                doc_category = None
-                if 'document_categorization' in st.session_state and file_id in st.session_state.document_categorization:
-                    doc_category_result = st.session_state.document_categorization.get(file_id, {})
-                    doc_category = doc_category_result.get('category')
-                
-                # Get template ID for validation 
-                # (Note: we already have template_id from earlier, but confirming it's the one we want to use)
-                # This is the template ID that would be used for metadata application
-                template_id_for_validation = target_template_id
-                
-                logger.info(f"Validating with doc_type={current_doc_type}, doc_category={doc_category}, template_id={template_id_for_validation}")
-                
-                # Use the enhanced validation method that supports category-template specific rules
-                validation_output = st.session_state.validator.validate(
-                    ai_response=extracted_metadata, 
-                    doc_type=current_doc_type,
-                    doc_category=doc_category,
-                    template_id=template_id_for_validation
-                )
-                
-                confidence_output = st.session_state.confidence_adjuster.adjust_confidence(extracted_metadata, validation_output)
-                overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
-
-                # Convert confidence strings to numerical values for validation
+                # Normalize confidence values and prepare for validation
                 def normalize_confidence(confidence):
                     if isinstance(confidence, str):
                         confidence = confidence.lower()
@@ -356,7 +346,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                             return 0.3
                     return float(confidence) if isinstance(confidence, (int, float)) else 0.3
 
-                # Prepare AI response with numerical confidence for validation
+                # Prepare AI response with normalized confidence for validation
                 validation_ai_response = {}
                 for field_key, field_data in extracted_metadata.items():
                     if isinstance(field_data, dict):
@@ -369,10 +359,10 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                             "value": field_data,
                             "confidence": 0.6  # Default medium confidence for primitive values
                         }
-
+                
+                # Run validation with normalized confidence values
                 logger.info(f"Validating with doc_type={current_doc_type}, doc_category={doc_category}, template_id={template_id_for_validation}")
                 
-                # Use the enhanced validation method with normalized confidence values
                 validation_output = st.session_state.validator.validate(
                     ai_response=validation_ai_response,
                     doc_type=current_doc_type,
@@ -383,7 +373,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 confidence_output = st.session_state.confidence_adjuster.adjust_confidence(validation_ai_response, validation_output)
                 overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
 
-                # --- Restructure results to match results_viewer.py expectations ---
+                # Get validation rules for this template
                 validation_rules = st.session_state.rule_loader.get_rules_for_category_template(
                     doc_category=doc_category,
                     template_id=template_id_for_validation
@@ -391,29 +381,33 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 
                 fields_for_ui = {}
                 
-                # Process each field to format it correctly for the results viewer
-                for field_key, ai_field_data in extracted_metadata.items():
+                # First, process all fields from the schema to ensure we don't miss any
+                schema_fields = {field['key']: field for field in validation_rules.get('fields', [])}
+                
+                # Process each field from the schema first
+                for field_key, field_def in schema_fields.items():
                     field_data = {
                         "value": None,
-                        "ai_confidence": "Low",  # Default
+                        "ai_confidence": "Low",
                         "validations": [],
                         "field_validation_status": "skip",
                         "adjusted_confidence": "Low",
-                        "is_mandatory": False,
+                        "is_mandatory": field_key in validation_rules.get("mandatory_fields", []),
                         "is_present": False
                     }
                     
-                    # Handle AI response data
-                    if isinstance(ai_field_data, dict):
-                        field_data["value"] = ai_field_data.get("value")
-                        confidence = ai_field_data.get("confidence")
-                        if confidence and isinstance(confidence, str) and confidence.lower() in ["high", "medium", "low"]:
-                            field_data["ai_confidence"] = confidence.capitalize()
+                    # Check if we have this field in the AI response
+                    ai_field_data = extracted_metadata.get(field_key)
+                    
+                    if ai_field_data is not None:
+                        if isinstance(ai_field_data, dict):
+                            field_data["value"] = ai_field_data.get("value")
+                            confidence = ai_field_data.get("confidence")
+                            if confidence and isinstance(confidence, str):
+                                field_data["ai_confidence"] = confidence.capitalize()
                         else:
-                            field_data["ai_confidence"] = "Low"
-                    elif isinstance(ai_field_data, (str, int, float, bool)):
-                        field_data["value"] = ai_field_data
-                        field_data["ai_confidence"] = "Medium"  # Default for primitive values
+                            field_data["value"] = ai_field_data
+                            field_data["ai_confidence"] = "Medium"
                     
                     # Get validation details
                     field_validations = validation_output.get("field_validations", {}).get(field_key, {})
@@ -423,15 +417,34 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     # Get adjusted confidence
                     adjusted_confidence = confidence_output.get(field_key, {})
                     if isinstance(adjusted_confidence, dict):
-                        field_data["adjusted_confidence"] = adjusted_confidence.get("confidence_qualitative", "Low").capitalize()
-                    elif isinstance(adjusted_confidence, str):
-                        field_data["adjusted_confidence"] = adjusted_confidence.capitalize()
+                        confidence_qual = adjusted_confidence.get("confidence_qualitative")
+                        if confidence_qual:
+                            field_data["adjusted_confidence"] = confidence_qual.capitalize()
                     
-                    # Check mandatory status
-                    field_data["is_mandatory"] = field_key in validation_rules.get("mandatory_fields", [])
+                    # Check if field is present (not None and not empty string)
                     field_data["is_present"] = field_data["value"] is not None and str(field_data["value"]).strip() != ""
                     
                     fields_for_ui[field_key] = field_data
+                
+                # Process any additional fields from AI response that weren't in the schema
+                for field_key, ai_field_data in extracted_metadata.items():
+                    if field_key not in fields_for_ui:
+                        field_data = {
+                            "value": ai_field_data.get("value") if isinstance(ai_field_data, dict) else ai_field_data,
+                            "ai_confidence": "Medium",
+                            "validations": [],
+                            "field_validation_status": "skip",
+                            "adjusted_confidence": "Low",
+                            "is_mandatory": False,
+                            "is_present": True
+                        }
+                        
+                        if isinstance(ai_field_data, dict) and "confidence" in ai_field_data:
+                            confidence = ai_field_data["confidence"]
+                            if isinstance(confidence, str):
+                                field_data["ai_confidence"] = confidence.capitalize()
+                        
+                        fields_for_ui[field_key] = field_data
 
                 # Get document-level validation summary
                 document_summary_for_ui = {
