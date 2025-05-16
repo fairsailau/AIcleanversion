@@ -344,18 +344,55 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 confidence_output = st.session_state.confidence_adjuster.adjust_confidence(extracted_metadata, validation_output)
                 overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
 
+                # Convert confidence strings to numerical values for validation
+                def normalize_confidence(confidence):
+                    if isinstance(confidence, str):
+                        confidence = confidence.lower()
+                        if confidence == "high":
+                            return 0.9
+                        elif confidence == "medium":
+                            return 0.6
+                        elif confidence == "low":
+                            return 0.3
+                    return float(confidence) if isinstance(confidence, (int, float)) else 0.3
+
+                # Prepare AI response with numerical confidence for validation
+                validation_ai_response = {}
+                for field_key, field_data in extracted_metadata.items():
+                    if isinstance(field_data, dict):
+                        validation_ai_response[field_key] = {
+                            "value": field_data.get("value"),
+                            "confidence": normalize_confidence(field_data.get("confidence", "Low"))
+                        }
+                    else:
+                        validation_ai_response[field_key] = {
+                            "value": field_data,
+                            "confidence": 0.6  # Default medium confidence for primitive values
+                        }
+
+                logger.info(f"Validating with doc_type={current_doc_type}, doc_category={doc_category}, template_id={template_id_for_validation}")
+                
+                # Use the enhanced validation method with normalized confidence values
+                validation_output = st.session_state.validator.validate(
+                    ai_response=validation_ai_response,
+                    doc_type=current_doc_type,
+                    doc_category=doc_category,
+                    template_id=template_id_for_validation
+                )
+                
+                confidence_output = st.session_state.confidence_adjuster.adjust_confidence(validation_ai_response, validation_output)
+                overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
+
                 # --- Restructure results to match results_viewer.py expectations ---
-                # Get the validation rules for mandatory field checks
                 validation_rules = st.session_state.rule_loader.get_rules_for_category_template(
                     doc_category=doc_category,
                     template_id=template_id_for_validation
                 )
                 
                 fields_for_ui = {}
-                raw_ai_data = extracted_metadata if isinstance(extracted_metadata, dict) else {}
                 
                 # Process each field to format it correctly for the results viewer
-                for field_key, ai_field_data in raw_ai_data.items():
+                for field_key, ai_field_data in extracted_metadata.items():
                     field_data = {
                         "value": None,
                         "ai_confidence": "Low",  # Default
@@ -370,9 +407,8 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     if isinstance(ai_field_data, dict):
                         field_data["value"] = ai_field_data.get("value")
                         confidence = ai_field_data.get("confidence")
-                        if confidence and isinstance(confidence, str):
-                            # Use the confidence directly from AI response (High/Medium/Low)
-                            field_data["ai_confidence"] = confidence
+                        if confidence and isinstance(confidence, str) and confidence.lower() in ["high", "medium", "low"]:
+                            field_data["ai_confidence"] = confidence.capitalize()
                         else:
                             field_data["ai_confidence"] = "Low"
                     elif isinstance(ai_field_data, (str, int, float, bool)):
@@ -387,9 +423,9 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     # Get adjusted confidence
                     adjusted_confidence = confidence_output.get(field_key, {})
                     if isinstance(adjusted_confidence, dict):
-                        field_data["adjusted_confidence"] = adjusted_confidence.get("confidence_qualitative", "Low")
+                        field_data["adjusted_confidence"] = adjusted_confidence.get("confidence_qualitative", "Low").capitalize()
                     elif isinstance(adjusted_confidence, str):
-                        field_data["adjusted_confidence"] = adjusted_confidence
+                        field_data["adjusted_confidence"] = adjusted_confidence.capitalize()
                     
                     # Check mandatory status
                     field_data["is_mandatory"] = field_key in validation_rules.get("mandatory_fields", [])
@@ -403,17 +439,20 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     "missing_mandatory_fields": validation_output.get("mandatory_check", {}).get("missing_fields", []),
                     "cross_field_status": "Not Implemented",
                     "cross_field_results": [],
-                    "overall_document_confidence_suggestion": overall_status_info.get("status", "Low")
+                    "overall_document_confidence_suggestion": overall_status_info.get("status", "Low").capitalize()
                 }
 
                 # Store the results in session state
+                if 'extraction_results' not in st.session_state:
+                    st.session_state.extraction_results = {}
+                    
                 st.session_state.extraction_results[file_id] = {
                     "file_name": file_name,
                     "document_type": current_doc_type,
                     "template_id_used_for_extraction": template_id_for_validation,
                     "fields": fields_for_ui,
                     "document_validation_summary": document_summary_for_ui,
-                    "raw_ai_response": raw_ai_data
+                    "raw_ai_response": extracted_metadata
                 }
                 
                 # Add to processing state results for progress tracking
