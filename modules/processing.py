@@ -27,7 +27,7 @@ def map_document_type_to_template(doc_type, template_mappings):
 
 def get_metadata_template_id(file_id, file_name, metadata_config):
     """
-    Determine which metadata template to use for the given file
+    Determine which metadata template to use for the given file and parse the Box template format
     
     Args:
         file_id: Box file ID
@@ -35,7 +35,9 @@ def get_metadata_template_id(file_id, file_name, metadata_config):
         metadata_config: Configuration containing template selection strategy and template_id
     
     Returns:
-        template_id: The determined template ID or None if not applicable
+        tuple: (template_id, doc_type) where:
+            - template_id: The determined template ID or None if not applicable
+            - doc_type: The document type if found, None otherwise
     """
     # First check if we have document categorization results
     doc_type = None
@@ -51,141 +53,79 @@ def get_metadata_template_id(file_id, file_name, metadata_config):
         template_id = st.session_state.document_type_to_template.get(doc_type)
         if template_id:
             logger.info(f"Using template for document type {doc_type}: {template_id}")
-            return template_id
+            return template_id, doc_type
     
     # Otherwise, use the direct template from metadata_config
     template_id = metadata_config.get("template_id")
     logger.info(f"Using direct template: {template_id}")
-    return template_id
+    return template_id, doc_type
 
 def get_fields_for_ai_from_template(scope, template_key):
     """
     Extract field definitions from a Box metadata template to prepare for AI extraction
     
+    Args:
+        scope: The template scope (e.g., 'enterprise')
+        template_key: The template key (e.g., 'tax' from enterprise_336904155_tax)
+    
     Returns:
         List of field definitions to pass to AI model
     """
-    if scope is None or template_key is None:
-        logger.error(f"Invalid scope ({scope}) or template_key ({template_key})")
-        return None
-    
-    # Get schema with descriptions for AI context
-    schema_details = None 
-    
-    # Check if we have a cached schema for this template
-    cache_key = f"{scope}/{template_key}"
-    if 'schema_cache' not in st.session_state:
-        st.session_state.schema_cache = {}
+    try:
+        # Get the schema for this template
+        client = st.session_state.box_client
+        template = client.metadata_template(scope, template_key).get()
         
-    if cache_key in st.session_state.schema_cache:
-        logger.info(f"Using cached schema for {cache_key}")
-        schema_details = st.session_state.schema_cache[cache_key]
-    else:
-        # Fetch schema from Box
-        try:
-            client = st.session_state.client
-            schema = client.metadata_template(scope, template_key).get()
-            
-            # Box API returns a MetadataTemplate object that needs conversion to dictionary
-            if hasattr(schema, 'fields') and not isinstance(schema, dict):
-                # Convert MetadataTemplate object to dictionary format expected by the rest of the code
-                temp_fields = []
-                for field in schema.fields:
-                    field_dict = {}
-                    for attr in ['key', 'type', 'displayName', 'description', 'options']:
-                        if hasattr(field, attr):
-                            field_dict[attr] = getattr(field, attr)
-                    temp_fields.append(field_dict)
-                
-                schema_details = {
-                    'displayName': getattr(schema, 'displayName', template_key),
-                    'fields': temp_fields
-                }
-                logger.info(f"Converted MetadataTemplate object to dictionary with {len(temp_fields)} fields")
-            else:
-                # It's already a dictionary or some other format
-                schema_details = schema
-            
-            # Cache the schema
-            st.session_state.schema_cache[cache_key] = schema_details
-            logger.info(f"Successfully fetched and cached schema (with descriptions) for {cache_key}")
-        except Exception as e:
-            logger.error(f"Error fetching metadata schema {scope}/{template_key}: {e}")
-            return None
-    
-    # Process the schema to extract fields
-    logger.info(f"Processing schema for {scope}/{template_key}: {type(schema_details)}")
-    if isinstance(schema_details, dict):
-        # Log the schema structure to help debug the issue
-        logger.info(f"Schema keys: {schema_details.keys()}")
+        # Convert MetadataTemplate object to dictionary for easier handling
+        template_dict = {
+            'displayName': template.displayName,
+            'fields': [{
+                'key': field.key,
+                'type': field.type,
+                'displayName': field.displayName,
+                'description': getattr(field, 'description', '')
+            } for field in template.fields]
+        }
+        logger.info(f"Converted MetadataTemplate object to dictionary with {len(template_dict['fields'])} fields")
         
-        # Check if 'fields' is in the schema or if we need to access it differently
-        fields_list = []
-        if 'fields' in schema_details:
-            fields_list = schema_details.get('fields', [])
-            logger.info(f"Found {len(fields_list)} fields in schema['fields']")
-        elif hasattr(schema_details, 'fields'):
-            # Try to access fields as an attribute
-            fields_list = schema_details.fields
-            logger.info(f"Found fields as an attribute with {len(fields_list)} items")
+        # Cache the schema for later use in validation
+        schema_cache_key = f"{scope}/{template_key}"
+        if not hasattr(st.session_state, 'metadata_schema_cache'):
+            st.session_state.metadata_schema_cache = {}
+        st.session_state.metadata_schema_cache[schema_cache_key] = template_dict
+        logger.info(f"Successfully fetched and cached schema (with descriptions) for {schema_cache_key}")
         
-        # Format this as a clean list for the AI model
+        # Process schema for AI fields
+        logger.info(f"Processing schema for {schema_cache_key}: {type(template_dict)}")
+        logger.info(f"Schema keys: {template_dict.keys()}")
+        
+        fields = template_dict.get('fields', [])
+        logger.info(f"Found {len(fields)} fields in schema['fields']")
+        
+        # Convert fields to format expected by AI
         ai_fields = []
-        for field in fields_list:
-            if isinstance(field, dict):
-                field_key = field.get('key')
-                if not field_key:
-                    continue  # Skip fields without keys
-                    
-                # Only include essential fields for AI extraction
-                field_for_ai = {
-                    'key': field_key,
-                    'type': field.get('type', 'string'),
-                    'displayName': field.get('displayName', field_key)
-                }
-                
-                # Add description if available - helpful context for AI
-                if 'description' in field and field['description']:
-                    field_for_ai['description'] = field['description']
-                    
-                # If enum, include options
-                if 'options' in field and field['options']:
-                    field_for_ai['options'] = field['options']
-                ai_fields.append(field_for_ai)
-            elif hasattr(field, 'key') and getattr(field, 'key'):
-                # Handle if field is an object with attributes
-                field_key = getattr(field, 'key')
-                field_for_ai = {
-                    'key': field_key,
-                    'type': getattr(field, 'type', 'string'),
-                    'displayName': getattr(field, 'displayName', field_key)
-                }
-                
-                # Add description if available
-                if hasattr(field, 'description') and getattr(field, 'description'):
-                    field_for_ai['description'] = getattr(field, 'description')
-                    
-                # If enum, include options
-                if hasattr(field, 'options') and getattr(field, 'options'):
-                    field_for_ai['options'] = getattr(field, 'options')
-                ai_fields.append(field_for_ai)
+        for field in fields:
+            field_info = {
+                'key': field['key'],
+                'type': field['type'],
+                'displayName': field['displayName']
+            }
+            if field.get('description'):
+                field_info['description'] = field['description']
+            ai_fields.append(field_info)
         
         logger.info(f"Extracted {len(ai_fields)} AI fields from template schema")
-        if ai_fields:  # Only return if we have at least one field
-            return ai_fields
-        else:
-            logger.warning(f"No fields were extracted from the schema although schema contained {len(fields_list)} field definitions")
-            # Return a non-empty array with placeholder if no fields were extracted but schema had fields
-            if fields_list:
-                return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
-            return []
-    elif schema_details is None: # Explicitly handle None case (error fetching schema)
-        logger.error(f"Schema for {scope}/{template_key} could not be retrieved (returned None).")
+        
+        if not ai_fields:
+            logger.warning(f"No fields were extracted from the schema although schema contained {len(fields)} field definitions")
+            # Return a placeholder field to prevent errors
+            return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
+            
+        return ai_fields
+        
+    except Exception as e:
+        logger.error(f"Error getting fields from template: {e}")
         return None
-    else: # Handle empty schema or other unexpected formats
-        logger.warning(f"Schema for {scope}/{template_key} is empty or not in expected dict format: {schema_details}")
-        # Return a placeholder field instead of empty list to prevent processing from stopping
-        return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
 
 def process_files_with_progress(files_to_process: List[Dict[str, Any]], extraction_functions: Dict[str, Any], batch_size: int, processing_mode: str):
     """
