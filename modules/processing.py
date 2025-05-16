@@ -117,7 +117,26 @@ def get_fields_for_ai_from_template(scope, template_key):
         try:
             client = st.session_state.client
             schema = client.metadata_template(scope, template_key).get()
-            schema_details = schema
+            
+            # Box API returns a MetadataTemplate object that needs conversion to dictionary
+            if hasattr(schema, 'fields') and not isinstance(schema, dict):
+                # Convert MetadataTemplate object to dictionary format expected by the rest of the code
+                temp_fields = []
+                for field in schema.fields:
+                    field_dict = {}
+                    for attr in ['key', 'type', 'displayName', 'description', 'options']:
+                        if hasattr(field, attr):
+                            field_dict[attr] = getattr(field, attr)
+                    temp_fields.append(field_dict)
+                
+                schema_details = {
+                    'displayName': getattr(schema, 'displayName', template_key),
+                    'fields': temp_fields
+                }
+                logger.info(f"Converted MetadataTemplate object to dictionary with {len(temp_fields)} fields")
+            else:
+                # It's already a dictionary or some other format
+                schema_details = schema
             
             # Cache the schema
             st.session_state.schema_cache[cache_key] = schema_details
