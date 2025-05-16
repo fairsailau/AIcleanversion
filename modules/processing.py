@@ -201,15 +201,34 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     logger.error(f"Failed to determine metadata template for file {file_name}. Skipping file.")
                     continue
                 
-                # Get template key and scope (enterprise_id)
-                template_parts = target_template_id.split('_', 1)
-                if len(template_parts) == 2:
-                    scope = 'enterprise_' + template_parts[0]
-                    template_key = template_parts[1]
+                # Parse template ID to extract scope and key
+                # Template IDs from Box are in format: enterprise_<ID>_<template_key>
+                # But metadata API requires scope and template_key separately
+                
+                logger.info(f"Processing template ID: {target_template_id}")
+                
+                if target_template_id.startswith('enterprise_'):
+                    # For enterprise_336904155_tax format
+                    try:
+                        # Format is enterprise_ID_key
+                        parts = target_template_id.split('_', 2)
+                        if len(parts) >= 3:
+                            scope = 'enterprise'
+                            template_key = parts[2]  # Just the key part
+                        else:
+                            # If we can't split it correctly, use defaults
+                            scope = 'enterprise'
+                            template_key = target_template_id
+                    except Exception as e:
+                        logger.error(f"Error parsing template ID {target_template_id}: {e}")
+                        scope = 'enterprise'
+                        template_key = target_template_id
                 else:
-                    # Fallback to simple form
-                    scope = 'enterprise'  
+                    # For any other format
+                    scope = 'enterprise'
                     template_key = target_template_id
+                
+                logger.info(f"Using scope: {scope}, template_key: {template_key}")
                 
                 # Get fields from template
                 template_fields = get_fields_for_ai_from_template(scope, template_key)
@@ -337,6 +356,13 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 # Add to processing state results for progress tracking
                 if 'results' not in st.session_state.processing_state:
                     st.session_state.processing_state['results'] = {}
+                
+                selected_template_id_dt = template_id
+                st.session_state.document_type_to_template[doc_type] = selected_template_id_dt
+                
+                # Make sure batch size info is included
+                if 'batch_size' not in st.session_state.metadata_config:
+                    st.session_state.metadata_config['batch_size'] = 5
                 
                 st.session_state.processing_state['results'][file_id] = {
                     "status": "success",
@@ -526,6 +552,11 @@ def process_files():
     processing_mode = metadata_config.get('extraction_method', 'freeform')
     batch_size = metadata_config.get('batch_size', 5)
     
+    # Ensure batch size is properly set
+    if not batch_size or batch_size < 1:
+        batch_size = 5
+        metadata_config['batch_size'] = batch_size
+    
     # Validate metadata configuration and show warnings for missing templates
     if processing_mode == 'structured':
         # Check both possible key names for the template ID
@@ -564,8 +595,8 @@ def process_files():
     # Display status and controls
     st.subheader("Extraction Status")
     
-    status_col1, status_col2 = st.columns(2)
-    with status_col1:
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
         st.write(f"Files selected for processing: {len(st.session_state.selected_files)}")
         st.write(f"Extraction method: {processing_mode.capitalize()}")
         
@@ -574,17 +605,25 @@ def process_files():
             template_id = metadata_config.get('metadata_template_id') or metadata_config.get('template_id')
             if template_id:
                 st.write(f"Using template: {template_id}")
-            
-            template_map_str = ""
-            if 'template_mappings' in metadata_config:
-                for doc_type, template in metadata_config['template_mappings'].items():
-                    template_map_str += f"- {doc_type}: {template}\n"
-            
-            if template_map_str:
-                with st.expander("Template Mappings"):
-                    st.markdown(template_map_str)
+                
+    with col2:
+        # Add batch size configuration
+        batch_size = st.number_input("Batch Size", min_value=1, max_value=20, value=batch_size, key="batch_size_input")
+        st.session_state.metadata_config['batch_size'] = batch_size
+        st.write(f"Processing {batch_size} files at a time")
     
-    with status_col2:
+    # Display template mappings if available     
+    if processing_mode == 'structured':
+        template_map_str = ""
+        if 'template_mappings' in metadata_config:
+            for doc_type, template in metadata_config['template_mappings'].items():
+                template_map_str += f"- {doc_type}: {template}\n"
+        
+        if template_map_str:
+            with st.expander("Template Mappings"):
+                st.markdown(template_map_str)
+    
+    with col3:
         if st.session_state.processing_state.get('is_processing', False):
             # Display progress
             progress_bar = st.progress(0)
