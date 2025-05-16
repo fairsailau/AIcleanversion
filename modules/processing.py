@@ -514,6 +514,28 @@ def process_files():
     processing_mode = metadata_config.get('extraction_method', 'freeform')
     batch_size = metadata_config.get('batch_size', 5)
     
+    # Validate metadata configuration and show warnings for missing templates
+    if processing_mode == 'structured':
+        template_id = metadata_config.get('metadata_template_id')
+        if not template_id:
+            template_selection_method = metadata_config.get('template_selection_method', 'direct')
+            if template_selection_method == 'direct':
+                st.warning("⚠️ No metadata template selected. Please select a template in the Metadata Configuration page.")
+                st.error("Cannot process files in structured mode without a template. Please go back to Metadata Configuration.")
+                if st.button("Go to Metadata Configuration"):
+                    st.session_state.current_page = "Metadata Configuration"
+                    st.rerun()
+                return
+            elif template_selection_method == 'document_type_mapping':
+                # Check if we have valid mappings
+                template_mappings = metadata_config.get('template_mappings', {})
+                if not template_mappings:
+                    st.warning("⚠️ No template mappings defined. Please configure template mappings in the Metadata Configuration page.")
+                    if st.button("Go to Metadata Configuration"):
+                        st.session_state.current_page = "Metadata Configuration"
+                        st.rerun()
+                    return
+    
     # Initialize or reset processing state
     if 'processing_state' not in st.session_state:
         st.session_state.processing_state = {
@@ -535,6 +557,11 @@ def process_files():
         st.write(f"Extraction method: {processing_mode.capitalize()}")
         
         if processing_mode == 'structured':
+            # Display template information
+            template_id = metadata_config.get('metadata_template_id')
+            if template_id:
+                st.write(f"Using template: {template_id}")
+            
             template_map_str = ""
             if 'template_mappings' in metadata_config:
                 for doc_type, template in metadata_config['template_mappings'].items():
@@ -606,5 +633,5 @@ def process_files():
         
         if st.button("View Detailed Results"):
             # Navigate to results page
-            st.session_state.page = "View Results"
+            st.session_state.current_page = "View Results"
             st.rerun()
