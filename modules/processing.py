@@ -7,7 +7,7 @@ import random
 import json
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
-from modules.metadata_extraction import MetadataExtractor
+from modules.metadata_extraction import get_extraction_functions
 from modules.validation_engine import ValidationRuleLoader, Validator
 from modules.confidence_adjustment import ConfidenceAdjuster
 
