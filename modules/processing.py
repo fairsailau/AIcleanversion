@@ -146,37 +146,78 @@ def get_fields_for_ai_from_template(scope, template_key):
             return None
     
     # Process the schema to extract fields
-    if isinstance(schema_details, dict) and 'fields' in schema_details:
+    logger.info(f"Processing schema for {scope}/{template_key}: {type(schema_details)}")
+    if isinstance(schema_details, dict):
+        # Log the schema structure to help debug the issue
+        logger.info(f"Schema keys: {schema_details.keys()}")
+        
+        # Check if 'fields' is in the schema or if we need to access it differently
+        fields_list = []
+        if 'fields' in schema_details:
+            fields_list = schema_details.get('fields', [])
+            logger.info(f"Found {len(fields_list)} fields in schema['fields']")
+        elif hasattr(schema_details, 'fields'):
+            # Try to access fields as an attribute
+            fields_list = schema_details.fields
+            logger.info(f"Found fields as an attribute with {len(fields_list)} items")
+        
         # Format this as a clean list for the AI model
         ai_fields = []
-        for field in schema_details.get('fields', []):
-            field_key = field.get('key')
-            if not field_key:
-                continue  # Skip fields without keys
+        for field in fields_list:
+            if isinstance(field, dict):
+                field_key = field.get('key')
+                if not field_key:
+                    continue  # Skip fields without keys
+                    
+                # Only include essential fields for AI extraction
+                field_for_ai = {
+                    'key': field_key,
+                    'type': field.get('type', 'string'),
+                    'displayName': field.get('displayName', field_key)
+                }
                 
-            # Only include essential fields for AI extraction
-            field_for_ai = {
-                'key': field_key,
-                'type': field.get('type', 'string'),
-                'displayName': field.get('displayName', field_key)
-            }
-            
-            # Add description if available - helpful context for AI
-            if 'description' in field and field['description']:
-                field_for_ai['description'] = field['description']
+                # Add description if available - helpful context for AI
+                if 'description' in field and field['description']:
+                    field_for_ai['description'] = field['description']
+                    
+                # If enum, include options
+                if 'options' in field and field['options']:
+                    field_for_ai['options'] = field['options']
+                ai_fields.append(field_for_ai)
+            elif hasattr(field, 'key') and getattr(field, 'key'):
+                # Handle if field is an object with attributes
+                field_key = getattr(field, 'key')
+                field_for_ai = {
+                    'key': field_key,
+                    'type': getattr(field, 'type', 'string'),
+                    'displayName': getattr(field, 'displayName', field_key)
+                }
                 
-            # If enum, include options
-            details = field
-            if 'options' in details and details['options']:
-                field_for_ai['options'] = details['options']
-            ai_fields.append(field_for_ai)
-        return ai_fields
+                # Add description if available
+                if hasattr(field, 'description') and getattr(field, 'description'):
+                    field_for_ai['description'] = getattr(field, 'description')
+                    
+                # If enum, include options
+                if hasattr(field, 'options') and getattr(field, 'options'):
+                    field_for_ai['options'] = getattr(field, 'options')
+                ai_fields.append(field_for_ai)
+        
+        logger.info(f"Extracted {len(ai_fields)} AI fields from template schema")
+        if ai_fields:  # Only return if we have at least one field
+            return ai_fields
+        else:
+            logger.warning(f"No fields were extracted from the schema although schema contained {len(fields_list)} field definitions")
+            # Return a non-empty array with placeholder if no fields were extracted but schema had fields
+            if fields_list:
+                return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
+            return []
     elif schema_details is None: # Explicitly handle None case (error fetching schema)
         logger.error(f"Schema for {scope}/{template_key} could not be retrieved (returned None).")
         return None
     else: # Handle empty schema or other unexpected formats
         logger.warning(f"Schema for {scope}/{template_key} is empty or not in expected dict format: {schema_details}")
-        return [] # Return empty list if schema is empty but valid, or handle as error if appropriate
+        # Return a placeholder field instead of empty list to prevent processing from stopping
+        return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
 
 def process_files_with_progress(files_to_process: List[Dict[str, Any]], extraction_functions: Dict[str, Any], batch_size: int, processing_mode: str):
     """
