@@ -135,7 +135,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
     total_files = len(files_to_process)
     st.session_state.processing_state['total_files'] = total_files
     processed_count = 0
-    client = st.session_state.client
+    client = st.session_state.box_client
     metadata_config = st.session_state.get('metadata_config', {})
     ai_model = metadata_config.get('ai_model', 'azure__openai__gpt_4o_mini') # Default model
 
@@ -160,310 +160,285 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
         
         try:
             # Determine target template (if applicable)
-            target_template_id = None
+            target_template_id, current_doc_type = get_metadata_template_id(file_id, file_name, metadata_config)
+            if not target_template_id:
+                logger.error(f"Failed to determine metadata template for file {file_name}. Skipping file.")
+                continue
+                
+            # Parse template ID to extract scope and key
+            # Template IDs from Box are in format: enterprise_<ID>_<template_key>
+            # But metadata API requires scope and template_key separately
             
-            if processing_mode == 'structured':
-                # For structured mode, we need to have a metadata template
-                target_template_id = get_metadata_template_id(file_id, file_name, metadata_config)
-                if not target_template_id:
-                    logger.error(f"Failed to determine metadata template for file {file_name}. Skipping file.")
-                    continue
-                
-                # Parse template ID to extract scope and key
-                # Template IDs from Box are in format: enterprise_<ID>_<template_key>
-                # But metadata API requires scope and template_key separately
-                
-                logger.info(f"Processing template ID: {target_template_id}")
-                
-                if target_template_id.startswith('enterprise_'):
-                    # For enterprise_336904155_tax format
-                    try:
-                        # Format is enterprise_ID_key
-                        parts = target_template_id.split('_', 2)
-                        if len(parts) >= 3:
-                            scope = 'enterprise'
-                            template_key = parts[2]  # Just the key part
-                        else:
-                            # If we can't split it correctly, use defaults
-                            scope = 'enterprise'
-                            template_key = target_template_id
-                    except Exception as e:
-                        logger.error(f"Error parsing template ID {target_template_id}: {e}")
+            logger.info(f"Processing template ID: {target_template_id}")
+            
+            if target_template_id.startswith('enterprise_'):
+                # For enterprise_336904155_tax format
+                try:
+                    # Format is enterprise_ID_key
+                    parts = target_template_id.split('_', 2)
+                    if len(parts) >= 3:
+                        scope = 'enterprise'
+                        template_key = parts[2]  # Just the key part
+                    else:
+                        # If we can't split it correctly, use defaults
                         scope = 'enterprise'
                         template_key = target_template_id
-                else:
-                    # For any other format
+                except Exception as e:
+                    logger.error(f"Error parsing template ID {target_template_id}: {e}")
                     scope = 'enterprise'
                     template_key = target_template_id
+            else:
+                # For any other format
+                scope = 'enterprise'
+                template_key = target_template_id
                 
-                logger.info(f"Using scope: {scope}, template_key: {template_key}")
+            logger.info(f"Using scope: {scope}, template_key: {template_key}")
+            
+            # Get fields from template
+            template_fields = get_fields_for_ai_from_template(scope, template_key)
+            if not template_fields:
+                logger.error(f"Failed to extract fields from template {target_template_id} for file {file_name}. Skipping.")
+                continue
+            
+            logger.info(f"File {file_name}: Extracting structured data using template {target_template_id} with fields: {template_fields}")
+            
+            # Use appropriate extraction function if available
+            extraction_func = extraction_functions.get('structured')
+            if not extraction_func:
+                logger.error(f"No extraction function for structured mode. Skipping file {file_name}.")
+                continue
+            # Get document category if available
+            doc_category = None
+            if 'document_categorization' in st.session_state and 'results' in st.session_state.document_categorization:
+                if file_id in st.session_state.document_categorization['results']:
+                    doc_category_result = st.session_state.document_categorization['results'][file_id]
+                    doc_category = doc_category_result.get('category') or doc_category_result.get('document_type')
+            
+            # Perform the extraction
+            metadata_template = {
+                'scope': scope,
+                'template_key': template_key,
+                'id': target_template_id
+            }
+            
+            extracted_metadata = extraction_func(
+                client=client,
+                file_id=file_id, 
+                fields=template_fields,
+                metadata_template=metadata_template,
+                ai_model=ai_model
+            )
                 
-                # Get fields from template
-                template_fields = get_fields_for_ai_from_template(scope, template_key)
-                if not template_fields:
-                    logger.error(f"Failed to extract fields from template {target_template_id} for file {file_name}. Skipping.")
-                    continue
-                
-                logger.info(f"File {file_name}: Extracting structured data using template {target_template_id} with fields: {template_fields}")
-                
-                # Use appropriate extraction function if available
-                extraction_func = extraction_functions.get('structured')
-                if not extraction_func:
-                    logger.error(f"No extraction function for structured mode. Skipping file {file_name}.")
-                    continue
-                    
-                # Get template ID and document type for validation
-                template_id_for_validation, current_doc_type = get_metadata_template_id(file_id, file_name, metadata_config)
-                
-                # Get document category if available
-                doc_category = None
-                if 'document_categorization' in st.session_state and 'results' in st.session_state.document_categorization:
-                    if file_id in st.session_state.document_categorization['results']:
-                        doc_category_result = st.session_state.document_categorization['results'][file_id]
-                        doc_category = doc_category_result.get('category') or doc_category_result.get('document_type')
-                
-                # Perform the extraction
-                metadata_template = {
-                    'scope': scope,
-                    'template_key': template_key,
-                    'id': target_template_id
+            # Ensure extracted_metadata is a dictionary
+            if not isinstance(extracted_metadata, dict):
+                logger.error(f"Unexpected response format from extraction function: {type(extracted_metadata)}")
+                extracted_metadata = {}
+            
+            # Normalize confidence values and prepare for validation
+            def normalize_confidence(confidence):
+                if isinstance(confidence, str):
+                    confidence = confidence.lower()
+                    if confidence == "high":
+                        return 0.9
+                    elif confidence == "medium":
+                        return 0.6
+                    elif confidence == "low":
+                        return 0.3
+                return float(confidence) if isinstance(confidence, (int, float)) else 0.3
+            
+            # Prepare AI response with normalized confidence for validation
+            validation_ai_response = {}
+            for field_key, field_data in extracted_metadata.items():
+                if isinstance(field_data, dict):
+                    validation_ai_response[field_key] = {
+                        "value": field_data.get("value"),
+                        "confidence": normalize_confidence(field_data.get("confidence", "Low"))
+                    }
+                else:
+                    validation_ai_response[field_key] = {
+                        "value": field_data,
+                        "confidence": 0.6  # Default medium confidence for primitive values
+                    }
+            
+            # Run validation with normalized confidence values
+            logger.info(f"Validating with doc_type={current_doc_type}, doc_category={doc_category}, template_id={target_template_id}")
+            
+            validation_output = st.session_state.validator.validate(
+                ai_response=validation_ai_response,
+                doc_type=current_doc_type,
+                doc_category=doc_category,
+                template_id=target_template_id
+            )
+            
+            confidence_output = st.session_state.confidence_adjuster.adjust_confidence(validation_ai_response, validation_output)
+            overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
+
+            # Get validation rules for this template
+            validation_rules = st.session_state.rule_loader.get_rules_for_category_template(
+                doc_category=doc_category,
+                template_id=target_template_id
+            )
+            
+            fields_for_ui = {}
+            
+            # First, process all fields from the schema to ensure we don't miss any
+            schema_fields = {field['key']: field for field in validation_rules.get('fields', [])}
+            
+            # Process each field from the schema first
+            for field_key, field_def in schema_fields.items():
+                field_data = {
+                    "value": None,
+                    "ai_confidence": "Low",
+                    "validations": [],
+                    "field_validation_status": "skip",
+                    "adjusted_confidence": "Low",
+                    "is_mandatory": field_key in validation_rules.get("mandatory_fields", []),
+                    "is_present": False
                 }
                 
-                extracted_metadata = extraction_func(
-                    client=client,
-                    file_id=file_id, 
-                    fields=template_fields,
-                    metadata_template=metadata_template,
-                    ai_model=ai_model
-                )
+                # Check if we have this field in the AI response
+                ai_field_data = extracted_metadata.get(field_key)
                 
-                # Ensure extracted_metadata is a dictionary
-                if not isinstance(extracted_metadata, dict):
-                    logger.error(f"Unexpected response format from extraction function: {type(extracted_metadata)}")
-                    extracted_metadata = {}
-                
-                # Normalize confidence values and prepare for validation
-                def normalize_confidence(confidence):
-                    if isinstance(confidence, str):
-                        confidence = confidence.lower()
-                        if confidence == "high":
-                            return 0.9
-                        elif confidence == "medium":
-                            return 0.6
-                        elif confidence == "low":
-                            return 0.3
-                    return float(confidence) if isinstance(confidence, (int, float)) else 0.3
-
-                # Prepare AI response with normalized confidence for validation
-                validation_ai_response = {}
-                for field_key, field_data in extracted_metadata.items():
-                    if isinstance(field_data, dict):
-                        validation_ai_response[field_key] = {
-                            "value": field_data.get("value"),
-                            "confidence": normalize_confidence(field_data.get("confidence", "Low"))
-                        }
+                if ai_field_data is not None:
+                    if isinstance(ai_field_data, dict):
+                        field_data["value"] = ai_field_data.get("value")
+                        confidence = ai_field_data.get("confidence")
+                        if confidence and isinstance(confidence, str):
+                            field_data["ai_confidence"] = confidence.capitalize()
                     else:
-                        validation_ai_response[field_key] = {
-                            "value": field_data,
-                            "confidence": 0.6  # Default medium confidence for primitive values
-                        }
+                        field_data["value"] = ai_field_data
+                        field_data["ai_confidence"] = "Medium"
                 
-                # Run validation with normalized confidence values
-                logger.info(f"Validating with doc_type={current_doc_type}, doc_category={doc_category}, template_id={template_id_for_validation}")
+                # Get validation details
+                field_validations = validation_output.get("field_validations", {}).get(field_key, {})
+                field_data["validations"] = field_validations.get("messages", [])
+                field_data["field_validation_status"] = field_validations.get("status", "skip")
                 
-                validation_output = st.session_state.validator.validate(
-                    ai_response=validation_ai_response,
-                    doc_type=current_doc_type,
-                    doc_category=doc_category,
-                    template_id=template_id_for_validation
-                )
+                # Get adjusted confidence
+                adjusted_confidence = confidence_output.get(field_key, {})
+                if isinstance(adjusted_confidence, dict):
+                    confidence_qual = adjusted_confidence.get("confidence_qualitative")
+                    if confidence_qual:
+                        field_data["adjusted_confidence"] = confidence_qual.capitalize()
                 
-                confidence_output = st.session_state.confidence_adjuster.adjust_confidence(validation_ai_response, validation_output)
-                overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
-
-                # Get validation rules for this template
-                validation_rules = st.session_state.rule_loader.get_rules_for_category_template(
-                    doc_category=doc_category,
-                    template_id=template_id_for_validation
-                )
+                # Check if field is present (not None and not empty string)
+                field_data["is_present"] = field_data["value"] is not None and str(field_data["value"]).strip() != ""
                 
-                fields_for_ui = {}
-                
-                # First, process all fields from the schema to ensure we don't miss any
-                schema_fields = {field['key']: field for field in validation_rules.get('fields', [])}
-                
-                # Process each field from the schema first
-                for field_key, field_def in schema_fields.items():
+                fields_for_ui[field_key] = field_data
+            
+            # Process any additional fields from AI response that weren't in the schema
+            for field_key, ai_field_data in extracted_metadata.items():
+                if field_key not in fields_for_ui:
                     field_data = {
-                        "value": None,
-                        "ai_confidence": "Low",
+                        "value": ai_field_data.get("value") if isinstance(ai_field_data, dict) else ai_field_data,
+                        "ai_confidence": "Medium",
                         "validations": [],
                         "field_validation_status": "skip",
-                        "adjusted_confidence": "Low",
-                        "is_mandatory": field_key in validation_rules.get("mandatory_fields", []),
-                        "is_present": False
+                        "adjusted_confidence": "Medium",
+                        "is_mandatory": False,
+                        "is_present": True
                     }
                     
-                    # Check if we have this field in the AI response
-                    ai_field_data = extracted_metadata.get(field_key)
-                    
-                    if ai_field_data is not None:
-                        if isinstance(ai_field_data, dict):
-                            field_data["value"] = ai_field_data.get("value")
-                            confidence = ai_field_data.get("confidence")
-                            if confidence and isinstance(confidence, str):
-                                field_data["ai_confidence"] = confidence.capitalize()
-                        else:
-                            field_data["value"] = ai_field_data
-                            field_data["ai_confidence"] = "Medium"
-                    
-                    # Get validation details
-                    field_validations = validation_output.get("field_validations", {}).get(field_key, {})
-                    field_data["validations"] = field_validations.get("messages", [])
-                    field_data["field_validation_status"] = field_validations.get("status", "skip")
-                    
-                    # Get adjusted confidence
-                    adjusted_confidence = confidence_output.get(field_key, {})
-                    if isinstance(adjusted_confidence, dict):
-                        confidence_qual = adjusted_confidence.get("confidence_qualitative")
-                        if confidence_qual:
-                            field_data["adjusted_confidence"] = confidence_qual.capitalize()
-                    
-                    # Check if field is present (not None and not empty string)
-                    field_data["is_present"] = field_data["value"] is not None and str(field_data["value"]).strip() != ""
+                    if isinstance(ai_field_data, dict) and "confidence" in ai_field_data:
+                        confidence = ai_field_data["confidence"]
+                        if isinstance(confidence, str):
+                            field_data["ai_confidence"] = confidence.capitalize()
                     
                     fields_for_ui[field_key] = field_data
-                
-                # Process any additional fields from AI response that weren't in the schema
-                for field_key, ai_field_data in extracted_metadata.items():
-                    if field_key not in fields_for_ui:
-                        field_data = {
-                            "value": ai_field_data.get("value") if isinstance(ai_field_data, dict) else ai_field_data,
-                            "ai_confidence": "Medium",
-                            "validations": [],
-                            "field_validation_status": "skip",
-                            "adjusted_confidence": "Low",
-                            "is_mandatory": False,
-                            "is_present": True
-                        }
-                        
-                        if isinstance(ai_field_data, dict) and "confidence" in ai_field_data:
-                            confidence = ai_field_data["confidence"]
-                            if isinstance(confidence, str):
-                                field_data["ai_confidence"] = confidence.capitalize()
-                        
-                        fields_for_ui[field_key] = field_data
 
-                # Get document-level validation summary
-                document_summary_for_ui = {
-                    "mandatory_fields_status": validation_output.get("mandatory_check", {}).get("status", "Failed"),
-                    "missing_mandatory_fields": validation_output.get("mandatory_check", {}).get("missing_fields", []),
-                    "cross_field_status": "Not Implemented",
-                    "cross_field_results": [],
-                    "overall_document_confidence_suggestion": overall_status_info.get("status", "Low").capitalize()
-                }
+            # Get document-level validation summary
+            document_summary_for_ui = {
+                "mandatory_fields_status": validation_output.get("mandatory_check", {}).get("status", "Failed"),
+                "missing_mandatory_fields": validation_output.get("mandatory_check", {}).get("missing_fields", []),
+                "cross_field_status": "Not Implemented",
+                "cross_field_results": [],
+                "overall_document_confidence_suggestion": overall_status_info.get("status", "Low").capitalize()
+            }
 
-                # Store the results in session state
-                if 'extraction_results' not in st.session_state:
-                    st.session_state.extraction_results = {}
-                    
-                st.session_state.extraction_results[file_id] = {
-                    "file_name": file_name,
-                    "document_type": current_doc_type,
-                    "template_id_used_for_extraction": template_id_for_validation,
-                    "fields": fields_for_ui,
-                    "document_validation_summary": document_summary_for_ui,
-                    "raw_ai_response": extracted_metadata
-                }
+            # Store the results in session state
+            # Initialize extraction_results if not present
+            if 'extraction_results' not in st.session_state:
+                st.session_state.extraction_results = {}
                 
-                # Add to processing state results for progress tracking
-                if 'results' not in st.session_state.processing_state:
-                    st.session_state.processing_state['results'] = {}
-                
-                selected_template_id_dt = template_id
-                st.session_state.document_type_to_template[doc_type] = selected_template_id_dt
-                
-                # Make sure batch size info is included
-                if 'batch_size' not in st.session_state.metadata_config:
-                    st.session_state.metadata_config['batch_size'] = 5
-                
-                st.session_state.processing_state['results'][file_id] = {
-                    "status": "success",
-                    "file_name": file_name, 
-                    "document_type": current_doc_type,
-                    "message": f"Successfully processed {file_name}"
-                }
-                
-            elif processing_mode == 'freeform':
-                # Generic unstructured extraction
-                extraction_func = extraction_functions.get('freeform')
-                if not extraction_func:
-                    logger.error(f"No extraction function for freeform mode. Skipping file {file_name}.")
-                    continue
-                
-                # Perform the extraction
-                extracted_metadata = extraction_func(file_id=file_id)
-                
-                # Build a simpler UI structure for freeform results
-                fields_for_ui_simple = {}
-                if isinstance(extracted_metadata, dict):
-                    for field_key, value in extracted_metadata.items():
-                        if isinstance(value, dict) and "value" in value:
-                            # Handle structured response format
-                            fields_for_ui_simple[field_key] = {
-                                "value": value.get("value"),
-                                "ai_confidence": "Medium", 
-                                "validations": [],
-                                "field_validation_status": "skip",
-                                "adjusted_confidence": "Medium",
-                                "is_mandatory": False,
-                                "is_present": True
-                            }
-                        else:
-                            fields_for_ui_simple[field_key] = {
-                                "value": value,
-                                "ai_confidence": "Medium", 
-                                "validations": [],
-                                "field_validation_status": "skip",
-                                "adjusted_confidence": "Medium",
-                                "is_mandatory": False,
-                                "is_present": True
-                            }
-                
-                result_data = {
-                    "file_name": file_name,
-                    "file_id": file_id,
-                    "file_type": file_data.get("type", "unknown"),
-                    "document_type": current_doc_type,
-                    "extraction_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "processing_mode": processing_mode,
-                    "raw_extraction": extracted_metadata,
-                    "fields": fields_for_ui_simple,
-                    "document_summary": {
-                        "mandatory_fields_status": "N/A",
-                        "missing_mandatory_fields": [],
-                        "overall_document_confidence_suggestion": "Medium"
-                    }
-                }
-                
-                # Save in session state
-                if 'extraction_results' not in st.session_state:
-                    st.session_state.extraction_results = {}
-                st.session_state.extraction_results[file_id] = result_data
-                
-                # Also save to processing state
-                if 'results' not in st.session_state.processing_state:
-                    st.session_state.processing_state['results'] = {}
-                st.session_state.processing_state['results'][file_id] = {
-                    "status": "success",
-                    "file_name": file_name,
-                    "document_type": current_doc_type,
-                    "message": f"Successfully processed {file_name}"
-                }
+            # Store the extraction results
+            st.session_state.extraction_results[file_id] = {
+                "file_name": file_name,
+                "document_type": current_doc_type,
+                "template_id_used_for_extraction": target_template_id,
+                "fields": fields_for_ui,
+                "document_validation_summary": document_summary_for_ui,
+                "raw_ai_response": extracted_metadata
+            }
             
+            # Add to processing state results for progress tracking
+            if 'results' not in st.session_state.processing_state:
+                st.session_state.processing_state['results'] = {}
+            
+            # Update template mapping
+            if current_doc_type:
+                st.session_state.document_type_to_template[current_doc_type] = target_template_id
+            
+            # Make sure batch size info is included
+            if 'batch_size' not in st.session_state.metadata_config:
+                st.session_state.metadata_config['batch_size'] = 5
+            
+            # Update processing state
+            st.session_state.processing_state['results'][file_id] = {
+                "status": "success",
+                "file_name": file_name, 
+                "document_type": current_doc_type,
+                "message": f"Successfully processed {file_name}"
+            }
+                
+            # Update progress
             processed_count += 1
             st.session_state.processing_state['successful_count'] = processed_count
             logger.info(f"Successfully processed {file_name} - {processed_count}/{total_files}")
+            
+        except Exception as e:
+            logger.error(f"Error processing file {file_name}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            
+            # Save minimal error info
+            if 'extraction_results' not in st.session_state:
+                st.session_state.extraction_results = {}
+            
+            # Basic error result
+            st.session_state.extraction_results[file_id] = {
+                "file_name": file_name,
+                "document_type": current_doc_type,
+                "template_id_used_for_extraction": target_template_id if 'target_template_id' in locals() else None,
+                "fields": {},
+                "document_validation_summary": {
+                    "mandatory_fields_status": "Failed",
+                    "missing_mandatory_fields": [],
+                    "cross_field_status": "Not Implemented",
+                    "cross_field_results": [],
+                    "overall_document_confidence_suggestion": "Low"
+                },
+                "error": str(e),
+                "raw_ai_response": None
+            }
+            
+            # Update processing state
+            if 'results' not in st.session_state.processing_state:
+                st.session_state.processing_state['results'] = {}
+            
+            st.session_state.processing_state['results'][file_id] = {
+                "status": "error",
+                "file_name": file_name,
+                "document_type": current_doc_type,
+                "message": f"Error processing {file_name}: {str(e)}"
+            }
+            
+            # Update error count
+            st.session_state.processing_state['error_count'] = \
+                st.session_state.processing_state.get('error_count', 0) + 1
+            
+            processed_count += 1
+            st.session_state.processing_state['successful_count'] = processed_count
+            logger.info(f"Failed to process {file_name} - {processed_count}/{total_files}")
             
         except Exception as e:
             logger.error(f"Error during validation/confidence processing for {file_name}: {e}")
