@@ -369,11 +369,12 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     # Handle AI response data
                     if isinstance(ai_field_data, dict):
                         field_data["value"] = ai_field_data.get("value")
-                        confidence_score = ai_field_data.get("confidenceScore", 0.0)
-                        if not isinstance(confidence_score, (int, float)):
-                            try: confidence_score = float(confidence_score)
-                            except: confidence_score = 0.0
-                        field_data["ai_confidence"] = st.session_state.confidence_adjuster._get_qualitative_confidence(confidence_score)
+                        confidence = ai_field_data.get("confidence")
+                        if confidence and isinstance(confidence, str):
+                            # Use the confidence directly from AI response (High/Medium/Low)
+                            field_data["ai_confidence"] = confidence
+                        else:
+                            field_data["ai_confidence"] = "Low"
                     elif isinstance(ai_field_data, (str, int, float, bool)):
                         field_data["value"] = ai_field_data
                         field_data["ai_confidence"] = "Medium"  # Default for primitive values
