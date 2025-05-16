@@ -305,7 +305,19 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     continue
                     
                 # Perform the extraction
-                extracted_metadata = extraction_func(file_id=file_id, template_id=target_template_id, template_fields=template_fields)
+                # Fix parameter names to match the function signature in metadata_extraction.py
+                metadata_template = {
+                    'scope': scope,
+                    'template_key': template_key,
+                    'id': target_template_id
+                }
+                extracted_metadata = extraction_func(
+                    client=client,
+                    file_id=file_id, 
+                    fields=template_fields,
+                    metadata_template=metadata_template,
+                    ai_model=ai_model
+                )
                 
                 # Validate the extracted metadata
                 
