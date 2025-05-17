@@ -351,67 +351,62 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     template_id=template_id_for_validation
                 )
                 
-                fields_for_ui = {}
-                raw_ai_data = extracted_metadata if isinstance(extracted_metadata, dict) else {}
+                extraction_output = extracted_metadata if isinstance(extracted_metadata, dict) else {}
                 
-                # Process each field to format it correctly for the results viewer
-                for field_key, ai_field_data in raw_ai_data.items():
-                    field_data = {
-                        "value": None,
-                        "ai_confidence": "Low",  # Default
-                        "validations": [],
-                        "field_validation_status": "skip",
-                        "adjusted_confidence": "Low",
-                        "is_mandatory": False,
-                        "is_present": False
-                    }
-                    
-                    # Handle AI response data
-                    if isinstance(ai_field_data, dict):
-                        field_data["value"] = ai_field_data.get("value")
-                        confidence_score = ai_field_data.get("confidenceScore", 0.0)
-                        if not isinstance(confidence_score, (int, float)):
-                            try: confidence_score = float(confidence_score)
-                            except: confidence_score = 0.0
-                        field_data["ai_confidence"] = st.session_state.confidence_adjuster._get_qualitative_confidence(confidence_score)
-                    elif isinstance(ai_field_data, (str, int, float, bool)):
-                        field_data["value"] = ai_field_data
-                        field_data["ai_confidence"] = "Medium"  # Default for primitive values
+                # Process each field for UI display
+                fields_for_ui = {}
+                for field_key, field_data in extraction_output.items():
+                    if field_key.startswith('_'):
+                        continue
+                        
+                    # Get field value and confidence
+                    if isinstance(field_data, dict):
+                        value = field_data.get('value', '')
+                        confidence = field_data.get('confidence', 'Low')
+                    else:
+                        value = field_data
+                        confidence = 'Low'
                     
                     # Get validation details
-                    field_validations = validation_output.get("field_validations", {}).get(field_key, {})
-                    field_data["validations"] = field_validations.get("messages", [])
+                    field_validation = validation_output.get('field_validations', {}).get(field_key, {})
+                    validation_status = field_validation.get('status', 'skip')
+                    validation_messages = field_validation.get('messages', [])
                     
-                    # Set validation status - default to 'pass' instead of 'skip'
-                    field_data["field_validation_status"] = field_validations.get("status", "pass")
-                    
-                    # Get adjusted confidence - preserve numeric values
+                    # Get adjusted confidence details
                     adjusted_confidence = confidence_output.get(field_key, {})
-                    if isinstance(adjusted_confidence, dict):
-                        # Store both numeric and qualitative confidence
-                        field_data["adjusted_confidence"] = adjusted_confidence.get("confidence", 0.0)  # Numeric value
-                        field_data["confidence_qualitative"] = adjusted_confidence.get("confidence_qualitative", "Low")
-                    elif isinstance(adjusted_confidence, (int, float)):
-                        field_data["adjusted_confidence"] = adjusted_confidence
-                        field_data["confidence_qualitative"] = st.session_state.confidence_adjuster._get_qualitative_confidence(adjusted_confidence)
-                    else:
-                        # Fallback for string values
-                        field_data["adjusted_confidence"] = 0.5  # Default numeric value
-                        field_data["confidence_qualitative"] = str(adjusted_confidence) if adjusted_confidence else "Low"
                     
-                    # Check mandatory status
-                    field_data["is_mandatory"] = field_key in validation_rules.get("mandatory_fields", [])
-                    field_data["is_present"] = field_data["value"] is not None and str(field_data["value"]).strip() != ""
-                    
-                    fields_for_ui[field_key] = field_data
-
-                # Get document-level validation summary
+                    fields_for_ui[field_key] = {
+                        'value': value,
+                        'ai_confidence': confidence,
+                        'ai_confidence_qualitative': confidence if isinstance(confidence, str) else st.session_state.confidence_adjuster._get_qualitative_confidence(float(confidence)),
+                        'validation_status': validation_status,
+                        'validation_messages': validation_messages,
+                        'adjusted_confidence': adjusted_confidence.get('confidence', 0.0),
+                        'adjusted_confidence_qualitative': adjusted_confidence.get('confidence_qualitative', 'Low')
+                    }
+                
+                # Calculate document-level validation summary
+                mandatory_check = validation_output.get('mandatory_check', {})
+                mandatory_status = mandatory_check.get('status', 'Failed')
+                missing_fields = mandatory_check.get('missing_fields', [])
+                
+                # Calculate overall confidence
+                confidence_values = [
+                    float(field_data.get('adjusted_confidence', 0.0))
+                    for field_data in confidence_output.values()
+                    if isinstance(field_data, dict)
+                ]
+                
+                avg_confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
+                overall_confidence_qualitative = st.session_state.confidence_adjuster._get_qualitative_confidence(avg_confidence)
+                
                 document_summary_for_ui = {
-                    "mandatory_fields_status": validation_output.get("mandatory_check", {}).get("status", "Failed"),
-                    "missing_mandatory_fields": validation_output.get("mandatory_check", {}).get("missing_fields", []),
-                    "cross_field_status": "Not Implemented",
-                    "cross_field_results": [],
-                    "overall_document_confidence_suggestion": overall_status_info.get("status", "Low")
+                    'status': validation_output.get('status', 'Failed'),
+                    'mandatory_status': mandatory_status,
+                    'missing_fields': missing_fields,
+                    'overall_confidence': avg_confidence,
+                    'overall_confidence_qualitative': overall_confidence_qualitative,
+                    'field_count': len(fields_for_ui)
                 }
 
                 # Store the results in session state
@@ -421,7 +416,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     "template_id_used_for_extraction": template_id_for_validation,
                     "fields": fields_for_ui,
                     "document_validation_summary": document_summary_for_ui,
-                    "raw_ai_response": raw_ai_data
+                    "raw_ai_response": extraction_output
                 }
                 
                 # Add to processing state results for progress tracking
