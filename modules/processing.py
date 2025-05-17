@@ -94,17 +94,18 @@ def get_fields_for_ai_from_template(scope, template_key):
     """
     Extract field definitions from a Box metadata template to prepare for AI extraction
     
+    Args:
+        scope: The scope of the metadata template (e.g., 'enterprise')
+        template_key: The key of the metadata template
+    
     Returns:
-        List of field definitions to pass to AI model
+        List of field definitions formatted for Box AI metadata extraction
+        See: https://developer.box.com/guides/box-ai/ai-tutorials/extract-metadata-structured/
     """
     if scope is None or template_key is None:
         logger.error(f"Invalid scope ({scope}) or template_key ({template_key})")
         return None
     
-    # Get schema with descriptions for AI context
-    schema_details = None 
-    
-    # Check if we have a cached schema for this template
     cache_key = f"{scope}/{template_key}"
     if 'schema_cache' not in st.session_state:
         st.session_state.schema_cache = {}
@@ -113,111 +114,112 @@ def get_fields_for_ai_from_template(scope, template_key):
         logger.info(f"Using cached schema for {cache_key}")
         schema_details = st.session_state.schema_cache[cache_key]
     else:
-        # Fetch schema from Box
         try:
             client = st.session_state.client
             schema = client.metadata_template(scope, template_key).get()
             
-            # Box API returns a MetadataTemplate object that needs conversion to dictionary
-            if hasattr(schema, 'fields') and not isinstance(schema, dict):
-                # Convert MetadataTemplate object to dictionary format expected by the rest of the code
-                temp_fields = []
-                for field in schema.fields:
-                    field_dict = {}
-                    for attr in ['key', 'type', 'displayName', 'description', 'options']:
-                        if hasattr(field, attr):
-                            field_dict[attr] = getattr(field, attr)
-                    temp_fields.append(field_dict)
-                
-                schema_details = {
-                    'displayName': getattr(schema, 'displayName', template_key),
-                    'fields': temp_fields
-                }
-                logger.info(f"Converted MetadataTemplate object to dictionary with {len(temp_fields)} fields")
-            else:
-                # It's already a dictionary or some other format
-                schema_details = schema
+            # Convert MetadataTemplate object to Box AI compatible format
+            schema_details = {
+                'displayName': schema.displayName if hasattr(schema, 'displayName') else template_key,
+                'fields': []
+            }
             
-            # Cache the schema
+            if hasattr(schema, 'fields'):
+                for field in schema.fields:
+                    # Basic field properties
+                    field_dict = {
+                        'key': field.key,
+                        'displayName': getattr(field, 'displayName', field.key)
+                    }
+                    
+                    # Handle field type according to Box metadata types
+                    field_type = getattr(field, 'type', 'string')
+                    if field_type in ['string', 'float', 'date', 'enum']:
+                        field_dict['type'] = field_type
+                    else:
+                        # Default to string for unknown types
+                        field_dict['type'] = 'string'
+                        logger.warning(f"Unknown field type '{field_type}' for field '{field.key}', defaulting to string")
+                    
+                    # Add field description if available - helps Box AI understand context
+                    if hasattr(field, 'description') and field.description:
+                        field_dict['description'] = field.description
+                    
+                    # Handle enum options according to Box metadata format
+                    if field_type == 'enum' and hasattr(field, 'options'):
+                        try:
+                            options = []
+                            for opt in field.options:
+                                if hasattr(opt, 'key'):
+                                    options.append(opt.key)
+                            if options:
+                                field_dict['options'] = options
+                        except Exception as e:
+                            logger.warning(f"Error processing enum options for field '{field.key}': {e}")
+                    
+                    # Add prompt for freeform extraction
+                    prompt = f"Extract the {field_dict['displayName']}"
+                    if field_dict.get('description'):
+                        prompt += f" ({field_dict['description']})"
+                    if field_dict.get('options'):
+                        prompt += f". Valid values are: {', '.join(field_dict['options'])}"
+                    field_dict['prompt'] = prompt
+                    
+                    schema_details['fields'].append(field_dict)
+                
+                logger.info(f"Processed {len(schema_details['fields'])} fields from metadata template")
+            
             st.session_state.schema_cache[cache_key] = schema_details
-            logger.info(f"Successfully fetched and cached schema (with descriptions) for {cache_key}")
+            logger.info(f"Cached schema for {cache_key}")
+            
         except Exception as e:
             logger.error(f"Error fetching metadata schema {scope}/{template_key}: {e}")
             return None
     
-    # Process the schema to extract fields
-    logger.info(f"Processing schema for {scope}/{template_key}: {type(schema_details)}")
-    if isinstance(schema_details, dict):
-        # Log the schema structure to help debug the issue
-        logger.info(f"Schema keys: {schema_details.keys()}")
-        
-        # Check if 'fields' is in the schema or if we need to access it differently
-        fields_list = []
-        if 'fields' in schema_details:
-            fields_list = schema_details.get('fields', [])
-            logger.info(f"Found {len(fields_list)} fields in schema['fields']")
-        elif hasattr(schema_details, 'fields'):
-            # Try to access fields as an attribute
-            fields_list = schema_details.fields
-            logger.info(f"Found fields as an attribute with {len(fields_list)} items")
-        
-        # Format this as a clean list for the AI model
-        ai_fields = []
-        for field in fields_list:
-            if isinstance(field, dict):
-                field_key = field.get('key')
-                if not field_key:
-                    continue  # Skip fields without keys
-                    
-                # Only include essential fields for AI extraction
-                field_for_ai = {
-                    'key': field_key,
-                    'type': field.get('type', 'string'),
-                    'displayName': field.get('displayName', field_key)
-                }
-                
-                # Add description if available - helpful context for AI
-                if 'description' in field and field['description']:
-                    field_for_ai['description'] = field['description']
-                    
-                # If enum, include options
-                if 'options' in field and field['options']:
-                    field_for_ai['options'] = field['options']
-                ai_fields.append(field_for_ai)
-            elif hasattr(field, 'key') and getattr(field, 'key'):
-                # Handle if field is an object with attributes
-                field_key = getattr(field, 'key')
-                field_for_ai = {
-                    'key': field_key,
-                    'type': getattr(field, 'type', 'string'),
-                    'displayName': getattr(field, 'displayName', field_key)
-                }
-                
-                # Add description if available
-                if hasattr(field, 'description') and getattr(field, 'description'):
-                    field_for_ai['description'] = getattr(field, 'description')
-                    
-                # If enum, include options
-                if hasattr(field, 'options') and getattr(field, 'options'):
-                    field_for_ai['options'] = getattr(field, 'options')
-                ai_fields.append(field_for_ai)
-        
-        logger.info(f"Extracted {len(ai_fields)} AI fields from template schema")
-        if ai_fields:  # Only return if we have at least one field
-            return ai_fields
-        else:
-            logger.warning(f"No fields were extracted from the schema although schema contained {len(fields_list)} field definitions")
-            # Return a non-empty array with placeholder if no fields were extracted but schema had fields
-            if fields_list:
-                return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
-            return []
-    elif schema_details is None: # Explicitly handle None case (error fetching schema)
-        logger.error(f"Schema for {scope}/{template_key} could not be retrieved (returned None).")
+    if not isinstance(schema_details, dict) or 'fields' not in schema_details:
+        logger.error(f"Invalid schema format for {scope}/{template_key}")
         return None
-    else: # Handle empty schema or other unexpected formats
-        logger.warning(f"Schema for {scope}/{template_key} is empty or not in expected dict format: {schema_details}")
-        # Return a placeholder field instead of empty list to prevent processing from stopping
-        return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
+        
+    fields = schema_details['fields']
+    if not fields:
+        logger.warning(f"No fields found in schema for {scope}/{template_key}")
+        return None
+    
+    # Format fields for Box AI extraction (both structured and freeform)
+    ai_fields = []
+    freeform_prompts = []
+    
+    for field in fields:
+        if not isinstance(field, dict) or 'key' not in field:
+            logger.warning(f"Skipping invalid field format: {field}")
+            continue
+            
+        # Add field for structured extraction
+        ai_field = {
+            'key': field['key'],
+            'type': field['type'],
+            'displayName': field['displayName']
+        }
+        
+        # Only include optional fields if they have values
+        if field.get('description'):
+            ai_field['description'] = field['description']
+        if field.get('options'):
+            ai_field['options'] = field['options']
+            
+        ai_fields.append(ai_field)
+        
+        # Add prompt for freeform extraction
+        freeform_prompts.append(field['prompt'])
+    
+    logger.info(f"Prepared {len(ai_fields)} fields for Box AI extraction")
+    
+    # Store freeform prompts in session state for use in freeform extraction
+    if not hasattr(st.session_state, 'freeform_prompts'):
+        st.session_state.freeform_prompts = {}
+    st.session_state.freeform_prompts[cache_key] = freeform_prompts
+    
+    return ai_fields if ai_fields else None
 
 def process_files_with_progress(files_to_process: List[Dict[str, Any]], extraction_functions: Dict[str, Any], batch_size: int, processing_mode: str):
     """
