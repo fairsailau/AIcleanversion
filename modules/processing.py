@@ -326,10 +326,10 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     doc_category_result = st.session_state.document_categorization.get(file_id, {})
                     doc_category = doc_category_result.get('category')
                 
-                # Get template ID for validation 
-                # (Note: we already have template_id from earlier, but confirming it's the one we want to use)
-                # This is the template ID that would be used for metadata application
-                template_id_for_validation = target_template_id
+                # Ensure template_id_for_validation is properly defined
+                template_id_for_validation = None
+                if processing_mode == 'structured':
+                    template_id_for_validation = target_template_id  # Set the template_id_for_validation here
                 
                 logger.info(f"Validating with doc_type={current_doc_type}, doc_category={doc_category}, template_id={template_id_for_validation}")
                 
@@ -381,14 +381,23 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     # Get validation details
                     field_validations = validation_output.get("field_validations", {}).get(field_key, {})
                     field_data["validations"] = field_validations.get("messages", [])
-                    field_data["field_validation_status"] = field_validations.get("status", "skip")
                     
-                    # Get adjusted confidence
+                    # Set validation status - default to 'pass' instead of 'skip'
+                    field_data["field_validation_status"] = field_validations.get("status", "pass")
+                    
+                    # Get adjusted confidence - preserve numeric values
                     adjusted_confidence = confidence_output.get(field_key, {})
                     if isinstance(adjusted_confidence, dict):
-                        field_data["adjusted_confidence"] = adjusted_confidence.get("confidence_qualitative", "Low")
-                    elif isinstance(adjusted_confidence, str):
+                        # Store both numeric and qualitative confidence
+                        field_data["adjusted_confidence"] = adjusted_confidence.get("confidence", 0.0)  # Numeric value
+                        field_data["confidence_qualitative"] = adjusted_confidence.get("confidence_qualitative", "Low")
+                    elif isinstance(adjusted_confidence, (int, float)):
                         field_data["adjusted_confidence"] = adjusted_confidence
+                        field_data["confidence_qualitative"] = st.session_state.confidence_adjuster._get_qualitative_confidence(adjusted_confidence)
+                    else:
+                        # Fallback for string values
+                        field_data["adjusted_confidence"] = 0.5  # Default numeric value
+                        field_data["confidence_qualitative"] = str(adjusted_confidence) if adjusted_confidence else "Low"
                     
                     # Check mandatory status
                     field_data["is_mandatory"] = field_key in validation_rules.get("mandatory_fields", [])
