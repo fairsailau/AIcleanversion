@@ -428,7 +428,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 if 'results' not in st.session_state.processing_state:
                     st.session_state.processing_state['results'] = {}
                 
-                selected_template_id_dt = template_id
+                selected_template_id_dt = target_template_id  # Use target_template_id instead of undefined template_id
                 st.session_state.document_type_to_template[doc_type] = selected_template_id_dt
                 
                 # Make sure batch size info is included
