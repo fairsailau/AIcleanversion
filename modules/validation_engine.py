@@ -3,7 +3,7 @@ import json
 import re
 import logging
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
 
 
 logger = logging.getLogger(__name__)
@@ -323,15 +323,26 @@ class Validator:
                 logger.info(f"Field '{field_key}' found in response (exact match)")
             else:
                 # Try case-insensitive match or with common variations (spaces, underscores, etc.)
-                normalized_field_key = field_key.lower().replace(" ", "_").replace("-", "_")
-                for response_key in ai_response.keys():
-                    normalized_response_key = response_key.lower().replace(" ", "_").replace("-", "_")
-                    if normalized_response_key == normalized_field_key:
-                        field_found = True
-                        actual_field_key = response_key  # Use the actual key from the response
-                        field_value = ai_response[response_key]
-                        logger.info(f"Field '{field_key}' found as '{response_key}' in response (normalized match)")
-                        break
+                if field_key is not None:  # Skip if field_key is None
+                    try:
+                        normalized_field_key = field_key.lower().replace(" ", "_").replace("-", "_")
+                        for response_key in ai_response.keys():
+                            if response_key is not None:  # Skip None keys in response
+                                try:
+                                    normalized_response_key = response_key.lower().replace(" ", "_").replace("-", "_")
+                                    if normalized_response_key == normalized_field_key:
+                                        field_found = True
+                                        actual_field_key = response_key  # Use the actual key from the response
+                                        field_value = ai_response[response_key]
+                                        logger.info(f"Field '{field_key}' found as '{response_key}' in response (normalized match)")
+                                        break
+                                except (AttributeError, TypeError):
+                                    # Skip keys that can't be normalized
+                                    continue
+                    except (AttributeError, TypeError):
+                        # Skip fields that can't be normalized
+                        logger.warning(f"Skipping field with invalid key: {field_key}")
+                        continue
             
             if field_found and field_value is not None:
                 # Handle both formats: direct values and dictionary with 'value' key
@@ -380,13 +391,26 @@ class ConfidenceAdjuster:
         self.mandatory_failure_penalty = mandatory_failure_penalty
     
     def _get_qualitative_confidence(self, score: float) -> str:
-        """Convert a numerical confidence score to a qualitative rating"""
+        """Convert numerical confidence score to qualitative value"""
         if score >= self.high_confidence_threshold:
-            return "high"
+            return "High"
         elif score >= self.medium_confidence_threshold:
-            return "medium"
-        else:
-            return "low"
+            return "Medium"
+        return "Low"
+
+    def _get_numeric_confidence(self, confidence: Union[float, str, dict]) -> float:
+        """Convert various confidence formats to numeric value"""
+        if isinstance(confidence, (int, float)):
+            return float(confidence)
+        elif isinstance(confidence, str):
+            confidence_map = {"High": 0.9, "Medium": 0.6, "Low": 0.3}
+            return confidence_map.get(confidence, 0.0)
+        elif isinstance(confidence, dict):
+            if "confidence" in confidence:
+                return self._get_numeric_confidence(confidence["confidence"])
+            elif "value" in confidence:
+                return self._get_numeric_confidence(confidence["value"])
+        return 0.0
     
     def adjust_confidence(self, ai_response: Dict[str, Any], validation_output: Dict[str, Any]) -> Dict[str, Any]:
         """Adjust confidence scores based on validation results"""
@@ -395,36 +419,44 @@ class ConfidenceAdjuster:
         
         # Create a deep copy to avoid modifying the original
         adjusted_output = {}
+        
         for field_key, field_data in ai_response.items():
-            # Skip metadata fields or fields with no confidence
-            if field_key.startswith("_") or not isinstance(field_data, dict) or "confidence" not in field_data:
-                adjusted_output[field_key] = field_data
+            # Skip metadata fields
+            if field_key.startswith("_"):
                 continue
             
-            # Start with the original confidence
-            original_confidence = field_data.get("confidence", 0.0)
+            # Get original confidence (handle different formats)
+            if isinstance(field_data, dict):
+                original_confidence = self._get_numeric_confidence(field_data.get("confidence", 0.0))
+                field_value = field_data.get("value")
+            else:
+                original_confidence = 0.0
+                field_value = field_data
+            
+            # Start with original confidence
             adjusted_confidence = original_confidence
             
-            # Apply penalties based on validation
-            if field_key in field_validations:
-                field_validation = field_validations[field_key]
-                if field_validation.get("status") == "fail":
-                    adjusted_confidence = max(0.0, adjusted_confidence - self.validation_failure_penalty)
+            # Apply validation penalties
+            field_validation = field_validations.get(field_key, {})
+            if field_validation.get("status") == "fail":
+                adjusted_confidence = max(0.0, adjusted_confidence - self.validation_failure_penalty)
             
-            # Apply penalties for mandatory fields
-            missing_fields = mandatory_check.get("missing_fields", [])
-            if field_key in missing_fields:
+            # Apply mandatory field penalty
+            if field_key in mandatory_check.get("missing_fields", []):
                 adjusted_confidence = max(0.0, adjusted_confidence - self.mandatory_failure_penalty)
             
-            # Apply general penalty for low original confidence
+            # Apply low confidence penalty
             if original_confidence < self.medium_confidence_threshold:
                 adjusted_confidence = max(0.0, adjusted_confidence - self.low_confidence_penalty)
             
             # Create adjusted field data
-            adjusted_field = field_data.copy()
-            adjusted_field["original_confidence"] = original_confidence
-            adjusted_field["confidence"] = adjusted_confidence
-            adjusted_field["confidence_qualitative"] = self._get_qualitative_confidence(adjusted_confidence)
+            adjusted_field = {
+                "value": field_value,
+                "original_confidence": original_confidence,
+                "original_confidence_qualitative": self._get_qualitative_confidence(original_confidence),
+                "confidence": adjusted_confidence,
+                "confidence_qualitative": self._get_qualitative_confidence(adjusted_confidence)
+            }
             
             adjusted_output[field_key] = adjusted_field
         
