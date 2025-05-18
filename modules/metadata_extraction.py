@@ -311,77 +311,81 @@ def get_extraction_functions() -> Dict[str, Any]:
                 return final_response
                     
             # Handle other response formats
-            if 'answer' in response_data and isinstance(response_data['answer'], str):
-                logger.info("Processing 'answer' as string (potential freeform JSON).")
-                response_text = response_data['answer']
-                try:
-                    json_start = response_text.find('{')
-                    json_end = response_text.rfind('}') + 1
-                    if json_start != -1 and json_end > json_start:
-                        json_str = response_text[json_start:json_end]
-                        parsed_json = json.loads(json_str)
-                        if isinstance(parsed_json, dict):
-                            for field_key, field_data in parsed_json.items():
-                                if isinstance(field_data, dict) and 'value' in field_data and ('confidence' in field_data):
-                                    extracted_value = field_data['value']
-                                    confidence_level = field_data['confidence']
-                                    if confidence_level not in ['High', 'Medium', 'Low']:
-                                        confidence_level = 'Medium'
-                                    processed_response[field_key] = extracted_value
-                                    processed_response[f'{field_key}_confidence'] = confidence_level
-                                else:
-                                    processed_response[field_key] = field_data
-                                    processed_response[f'{field_key}_confidence'] = 'Medium'
+            try:
+                if 'answer' in response_data and isinstance(response_data['answer'], str):
+                    logger.info("Processing 'answer' as string (potential freeform JSON).")
+                    response_text = response_data['answer']
+                    try:
+                        json_start = response_text.find('{')
+                        json_end = response_text.rfind('}') + 1
+                        if json_start != -1 and json_end > json_start:
+                            json_str = response_text[json_start:json_end]
+                            parsed_json = json.loads(json_str)
+                            if isinstance(parsed_json, dict):
+                                for field_key, field_data in parsed_json.items():
+                                    if isinstance(field_data, dict) and 'value' in field_data and ('confidence' in field_data):
+                                        extracted_value = field_data['value']
+                                        confidence_level = field_data['confidence']
+                                        if confidence_level not in ['High', 'Medium', 'Low']:
+                                            confidence_level = 'Medium'
+                                        processed_response[field_key] = extracted_value
+                                        processed_response[f'{field_key}_confidence'] = confidence_level
+                                    else:
+                                        processed_response[field_key] = field_data
+                                        processed_response[f'{field_key}_confidence'] = 'Medium'
+                            else:
+                                logger.warning(f"Parsed JSON from 'answer' string is not a dictionary: {parsed_json}")
+                                processed_response['_raw_response'] = response_text
+                                processed_response['_confidence_processing_failed'] = True
                         else:
-                            logger.warning(f"Parsed JSON from 'answer' string is not a dictionary: {parsed_json}")
+                            logger.warning("No JSON object found in 'answer' string.")
                             processed_response['_raw_response'] = response_text
                             processed_response['_confidence_processing_failed'] = True
-                    else:
-                        logger.warning("No JSON object found in 'answer' string.")
+                    except Exception as e:
+                        logger.error(f'Error parsing JSON from answer string: {str(e)}')
                         processed_response['_raw_response'] = response_text
                         processed_response['_confidence_processing_failed'] = True
-                except Exception as e:
-                    logger.error(f'Error parsing JSON from answer string: {str(e)}')
-                    processed_response['_raw_response'] = response_text
-                    processed_response['_confidence_processing_failed'] = True
-            elif 'entries' in response_data and len(response_data['entries']) > 0:
-                logger.info("Processing response using fallback 'entries' format.")
-                entry = response_data['entries'][0]
-                if 'metadata' in entry:
-                    metadata = entry['metadata']
-                    for field_key, field_value in metadata.items():
-                        extracted_value = field_value
-                        confidence_level = 'Medium'
-                        try:
-                            if isinstance(field_value, str) and field_value.strip().startswith('{') and field_value.strip().endswith('}'):
-                                try:
-                                    parsed_value = json.loads(field_value)
-                                    if isinstance(parsed_value, dict) and 'value' in parsed_value and ('confidence' in parsed_value):
-                                        extracted_value = parsed_value['value']
-                                        confidence_level = parsed_value['confidence']
-                                        if confidence_level not in ['High', 'Medium', 'Low']:
-                                            logger.warning(f"Field {field_key}: Unexpected confidence value '{confidence_level}', defaulting to Medium.")
-                                            confidence_level = 'Medium'
-                                    else:
-                                        logger.warning(f"Field {field_key}: Parsed JSON but keys 'value' and 'confidence' not found. Using raw value.")
-                                except json.JSONDecodeError:
-                                    logger.warning(f"Field {field_key}: Failed to parse potential JSON value '{field_value}'. Using raw value.")
-                            else:
-                                logger.info(f'Field {field_key}: Value is not the expected JSON format. Using raw value and Medium confidence.')
-                            processed_response[field_key] = extracted_value
-                            processed_response[f'{field_key}_confidence'] = confidence_level
-                        except Exception as e:
-                            logger.error(f"Error processing field {field_key} with value '{field_value}': {str(e)}")
-                            processed_response[field_key] = field_value
-                            processed_response[f'{field_key}_confidence'] = 'Low'
+                elif 'entries' in response_data and len(response_data['entries']) > 0:
+                    logger.info("Processing response using fallback 'entries' format.")
+                    entry = response_data['entries'][0]
+                    if 'metadata' in entry:
+                        metadata = entry['metadata']
+                        for field_key, field_value in metadata.items():
+                            extracted_value = field_value
+                            confidence_level = 'Medium'
+                            try:
+                                if isinstance(field_value, str) and field_value.strip().startswith('{') and field_value.strip().endswith('}'):
+                                    try:
+                                        parsed_value = json.loads(field_value)
+                                        if isinstance(parsed_value, dict) and 'value' in parsed_value and ('confidence' in parsed_value):
+                                            extracted_value = parsed_value['value']
+                                            confidence_level = parsed_value['confidence']
+                                            if confidence_level not in ['High', 'Medium', 'Low']:
+                                                logger.warning(f"Field {field_key}: Unexpected confidence value '{confidence_level}', defaulting to Medium.")
+                                                confidence_level = 'Medium'
+                                        else:
+                                            logger.warning(f"Field {field_key}: Parsed JSON but keys 'value' and 'confidence' not found. Using raw value.")
+                                    except json.JSONDecodeError:
+                                        logger.warning(f"Field {field_key}: Failed to parse potential JSON value '{field_value}'. Using raw value.")
+                                else:
+                                    logger.info(f'Field {field_key}: Value is not the expected JSON format. Using raw value and Medium confidence.')
+                                processed_response[field_key] = extracted_value
+                                processed_response[f'{field_key}_confidence'] = confidence_level
+                            except Exception as e:
+                                logger.error(f"Error processing field {field_key} with value '{field_value}': {str(e)}")
+                                processed_response[field_key] = field_value
+                                processed_response[f'{field_key}_confidence'] = 'Low'
+                    else:
+                        logger.warning(f"No 'metadata' field found in the structured API entry: {entry}")
+                        processed_response['_error'] = "No 'metadata' field in API entry"
+                        processed_response['_confidence_processing_failed'] = True
                 else:
-                    logger.warning(f"No 'metadata' field found in the structured API entry: {entry}")
-                    processed_response['_error'] = "No 'metadata' field in API entry"
+                    logger.warning(f"Neither 'answer' nor 'entries' field found in the structured API response: {response_data}")
+                    processed_response['_error'] = "Neither 'answer' nor 'entries' field in API response"
                     processed_response['_confidence_processing_failed'] = True
-            else:
-                logger.warning(f"Neither 'answer' nor 'entries' field found in the structured API response: {response_data}")
-                processed_response['_error'] = "Neither 'answer' nor 'entries' field in API response"
-                processed_response['_confidence_processing_failed'] = True
+            except Exception as e:
+                logger.error(f"Error processing API response: {str(e)}")
+                return {'error': f'Error processing API response: {str(e)}'}
             
             # Prepare the final response structure with standardized confidence values
             final_response = {
