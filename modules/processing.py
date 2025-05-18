@@ -364,12 +364,12 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 if processing_mode == 'structured':
                     template_id_for_validation = target_template_id  # Set the template_id_for_validation here
                 
-                logger.info(f"Validating with doc_type={current_doc_type}, doc_category={doc_category}, template_id={template_id_for_validation}")
+                logger.info(f"Validating with template_id={template_id_for_validation}, doc_category={doc_category}")
                 
                 # Use the enhanced validation method that supports category-template specific rules
                 validation_output = st.session_state.validator.validate(
-                    ai_response=extracted_metadata, 
-                    doc_type=current_doc_type,
+                    ai_response=extracted_metadata,
+                    doc_type=None,  # doc_type is no longer used in validation
                     doc_category=doc_category,
                     template_id=template_id_for_validation
                 )
@@ -456,8 +456,11 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 if 'results' not in st.session_state.processing_state:
                     st.session_state.processing_state['results'] = {}
                 
-                selected_template_id_dt = target_template_id  # Use target_template_id instead of undefined template_id
-                st.session_state.document_type_to_template[doc_type] = selected_template_id_dt
+                # Store the template mapping if we have a document type
+                if 'current_doc_type' in locals() and current_doc_type:
+                    if not hasattr(st.session_state, 'document_type_to_template'):
+                        st.session_state.document_type_to_template = {}
+                    st.session_state.document_type_to_template[current_doc_type] = target_template_id
                 
                 # Make sure batch size info is included
                 if 'batch_size' not in st.session_state.metadata_config:
@@ -466,7 +469,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 st.session_state.processing_state['results'][file_id] = {
                     "status": "success",
                     "file_name": file_name, 
-                    "document_type": current_doc_type,
+                    "document_type": current_doc_type if 'current_doc_type' in locals() else None,
                     "message": f"Successfully processed {file_name}"
                 }
                 
