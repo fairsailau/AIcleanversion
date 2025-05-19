@@ -442,14 +442,35 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     'field_count': len(fields_for_ui)
                 }
 
-                # Store the results in session state
+                # Store the results in session state with the structure expected by results_viewer.py
                 st.session_state.extraction_results[file_id] = {
                     "file_name": file_name,
                     "document_type": current_doc_type,
                     "template_id_used_for_extraction": template_id_for_validation,
-                    "fields": fields_for_ui,
-                    "document_validation_summary": document_summary_for_ui,
-                    "raw_ai_response": extraction_output
+                    "fields": {
+                        field_key: {
+                            "value": field_data.get('value', ''),
+                            "ai_confidence": field_data.get('ai_confidence', 'Low'),
+                            "adjusted_confidence": field_data.get('adjusted_confidence_qualitative', 'Low'),
+                            "field_validation_status": field_data.get('validation_status', 'skip').lower(),
+                            "validations": [
+                                {
+                                    "rule_type": "field_validation",
+                                    "status": field_data.get('validation_status', 'skip'),
+                                    "message": ". ".join(field_data.get('validation_messages', [])),
+                                    "confidence_impact": field_data.get('adjusted_confidence', 0.0)
+                                }
+                            ]
+                        }
+                        for field_key, field_data in fields_for_ui.items()
+                    },
+                    "document_validation_summary": {
+                        "mandatory_fields_status": document_summary_for_ui.get('mandatory_status', 'fail').lower(),
+                        "missing_mandatory_fields": document_summary_for_ui.get('missing_fields', []),
+                        "cross_field_status": "pass",  # Default to pass if not using cross-field validation
+                        "overall_document_confidence_suggestion": document_summary_for_ui.get('overall_confidence_qualitative', 'Low')
+                    },
+                    "raw_ai_response": extracted_metadata  # Store the raw response for reference
                 }
                 
                 # Add to processing state results for progress tracking
@@ -483,32 +504,27 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 # Perform the extraction
                 extracted_metadata = extraction_func(file_id=file_id)
                 
-                # Build a simpler UI structure for freeform results
-                fields_for_ui_simple = {}
+                # Build UI structure for freeform results with consistent format
+                fields_for_ui = {}
                 if isinstance(extracted_metadata, dict):
                     for field_key, value in extracted_metadata.items():
-                        if isinstance(value, dict) and "value" in value:
-                            # Handle structured response format
-                            fields_for_ui_simple[field_key] = {
-                                "value": value.get("value"),
-                                "ai_confidence": "Medium", 
-                                "validations": [],
-                                "field_validation_status": "skip",
-                                "adjusted_confidence": "Medium",
-                                "is_mandatory": False,
-                                "is_present": True
-                            }
-                        else:
-                            fields_for_ui_simple[field_key] = {
-                                "value": value,
-                                "ai_confidence": "Medium", 
-                                "validations": [],
-                                "field_validation_status": "skip",
-                                "adjusted_confidence": "Medium",
-                                "is_mandatory": False,
-                                "is_present": True
-                            }
+                        field_value = value.get("value", value) if isinstance(value, dict) else value
+                        fields_for_ui[field_key] = {
+                            "value": field_value,
+                            "ai_confidence": "Medium",
+                            "adjusted_confidence": "Medium",
+                            "field_validation_status": "skip",
+                            "validations": [
+                                {
+                                    "rule_type": "field_validation",
+                                    "status": "skip",
+                                    "message": "",
+                                    "confidence_impact": 0.0
+                                }
+                            ]
+                        }
                 
+                # Create result data with consistent structure
                 result_data = {
                     "file_name": file_name,
                     "file_id": file_id,
@@ -517,12 +533,14 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     "extraction_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "processing_mode": processing_mode,
                     "raw_extraction": extracted_metadata,
-                    "fields": fields_for_ui_simple,
-                    "document_summary": {
-                        "mandatory_fields_status": "N/A",
+                    "fields": fields_for_ui,
+                    "document_validation_summary": {
+                        "mandatory_fields_status": "pass",
                         "missing_mandatory_fields": [],
+                        "cross_field_status": "pass",
                         "overall_document_confidence_suggestion": "Medium"
-                    }
+                    },
+                    "raw_ai_response": extracted_metadata
                 }
                 
                 # Save in session state
@@ -563,46 +581,49 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
             except:
                 pass
                 
-            # Build minimal fields display
-            simple_fields = {}
+            # Build fields with consistent format for error case
+            fields_for_ui = {}
             if isinstance(raw_data, dict):
                 for field_key, value in raw_data.items():
-                    if isinstance(value, dict) and "value" in value:
-                        value = value.get("value")
-                    
-                    simple_fields[field_key] = {
-                        "value": value,
-                        "ai_confidence": "Low", 
-                        "validations": [],
-                        "field_validation_status": "skip",
+                    field_value = value.get("value", value) if isinstance(value, dict) else value
+                    fields_for_ui[field_key] = {
+                        "value": field_value,
+                        "ai_confidence": "Low",
                         "adjusted_confidence": "Low",
-                        "is_mandatory": False,
-                        "is_present": value is not None and str(value).strip() != ""
+                        "field_validation_status": "skip",
+                        "validations": [
+                            {
+                                "rule_type": "field_validation",
+                                "status": "error",
+                                "message": f"Processing error: {str(e)}",
+                                "confidence_impact": 0.0
+                            }
+                        ]
                     }
                 
-            result_data = {
-                "file_name": file_name,
-                "file_id": file_id,
-                "file_type": file_data.get("type", "unknown"),
-                "document_type": current_doc_type,
-                "extraction_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "processing_mode": processing_mode,
-                "raw_extraction": raw_data,
-                "error": str(e),
-                "fields": simple_fields,
-                "document_summary": {
-                    "mandatory_fields_status": "N/A",
-                    "missing_mandatory_fields": [],
-                    "overall_document_confidence_suggestion": "Low"
+                result_data = {
+                    "file_name": file_name,
+                    "file_id": file_id,
+                    "file_type": file_data.get("type", "unknown"),
+                    "document_type": current_doc_type,
+                    "extraction_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "processing_mode": processing_mode,
+                    "raw_extraction": raw_data,
+                    "error": str(e),
+                    "fields": fields_for_ui,
+                    "document_validation_summary": {
+                        "mandatory_fields_status": "fail",
+                        "missing_mandatory_fields": [],
+                        "cross_field_status": "fail",
+                        "overall_document_confidence_suggestion": "Low"
+                    },
+                    "raw_ai_response": raw_data
                 }
-            }
-            
-            st.session_state.extraction_results[file_id] = result_data
-            
-            # Add to processing state results for progress tracking
-            if 'results' not in st.session_state.processing_state:
-                st.session_state.processing_state['results'] = {}
                 
+                # Save in session state
+                if 'extraction_results' not in st.session_state:
+                    st.session_state.extraction_results = {}
+                st.session_state.extraction_results[file_id] = result_data
             st.session_state.processing_state['results'][file_id] = {
                 "status": "error",
                 "file_name": file_name,
