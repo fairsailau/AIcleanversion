@@ -103,12 +103,26 @@ def get_extraction_functions() -> Dict[str, Any]:
                         if isinstance(field_item, dict) and 'key' in field_item and ('value' in field_item):
                             field_key = field_item['key']
                             extracted_value = field_item['value']
-                            confidence_level = field_item.get('confidence', 'Medium')
-                            if confidence_level not in ['High', 'Medium', 'Low']:
-                                logger.warning(f"Field {field_key}: Unexpected confidence value '{confidence_level}', defaulting to Medium.")
-                                confidence_level = 'Medium'
-                            processed_response[field_key] = extracted_value
-                            processed_response[f'{field_key}_confidence'] = confidence_level
+                            origin = "default_no_confidence" # Default origin
+                            if 'confidence' in field_item:
+                                original_ai_confidence = field_item['confidence']
+                                if original_ai_confidence not in ['High', 'Medium', 'Low']:
+                                    confidence_level = 'Medium'
+                                    origin = "default_invalid_confidence"
+                                    logger.warning(f"Field {field_key}: AI returned invalid confidence '{original_ai_confidence}'. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_item}")
+                                else:
+                                    confidence_level = original_ai_confidence
+                                    origin = "ai_provided"
+                            else:
+                                confidence_level = 'Medium' # Default if 'confidence' key is missing
+                                origin = "default_no_confidence"
+                                logger.info(f"Field {field_key}: AI response missing 'confidence'. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_item}")
+                            
+                            processed_response[field_key] = {
+                                'value': extracted_value,
+                                'confidence': confidence_level,
+                                'confidence_origin': origin
+                            }
                         else:
                             logger.warning(f"Skipping invalid item in 'fields' array: {field_item}")
                 else:
@@ -116,31 +130,46 @@ def get_extraction_functions() -> Dict[str, Any]:
                     for field_key, field_data in answer_dict.items():
                         extracted_value = None
                         confidence_level = 'Medium'
+                        origin = "default_parsing_fallback" # Default origin, can be overridden
                         try:
                             if isinstance(field_data, dict) and 'value' in field_data and ('confidence' in field_data):
                                 extracted_value = field_data['value']
-                                confidence_level = field_data['confidence']
-                                if confidence_level not in ['High', 'Medium', 'Low']:
-                                    logger.warning(f"Field {field_key}: Unexpected confidence value '{confidence_level}', defaulting to Medium.")
+                                original_ai_confidence = field_data['confidence']
+                                if original_ai_confidence not in ['High', 'Medium', 'Low']:
                                     confidence_level = 'Medium'
+                                    origin = "default_invalid_confidence"
+                                    logger.warning(f"Field {field_key}: AI returned invalid confidence '{original_ai_confidence}'. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data: {field_data}")
+                                else:
+                                    confidence_level = original_ai_confidence
+                                    origin = "ai_provided"
                             elif field_data is None:
-                                logger.info(f'Field {field_key}: Received null value. Setting value to None and confidence to Low.')
                                 extracted_value = None
                                 confidence_level = 'Low'
+                                origin = "default_null_value"
+                                logger.info(f"Field {field_key}: AI returned null value. Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw AI data: {field_data}")
                             elif isinstance(field_data, dict) and 'value' in field_data and (len(field_data) == 1):
-                                logger.warning(f"Field {field_key}: Found dict with only 'value' key: {field_data}. Extracting value directly.")
                                 extracted_value = field_data['value']
                                 confidence_level = 'Medium' # Default confidence if not provided
+                                origin = "default_no_confidence"
+                                logger.warning(f"Field {field_key}: AI response missing 'confidence' key. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data: {field_data}")
                             else:
-                                logger.warning(f'Field {field_key}: Unexpected data format: {field_data}. Using raw data as value and Medium confidence.')
                                 extracted_value = field_data
                                 confidence_level = 'Medium'
-                            processed_response[field_key] = extracted_value
-                            processed_response[f'{field_key}_confidence'] = confidence_level
+                                origin = "default_parsing_fallback"
+                                logger.warning(f"Field {field_key}: Unexpected AI data format. Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw AI data: {field_data}")
+                            
+                            processed_response[field_key] = {
+                                'value': extracted_value,
+                                'confidence': confidence_level,
+                                'confidence_origin': origin
+                            }
                         except Exception as e:
-                            logger.error(f"Error processing field {field_key} with data '{field_data}': {str(e)}")
-                            processed_response[field_key] = field_data # Store raw data on error
-                            processed_response[f'{field_key}_confidence'] = 'Low'
+                            logger.error(f"Error processing field {field_key} with data '{field_data}': {str(e)}. Assigning Low confidence and default_error_processing origin.")
+                            processed_response[field_key] = {
+                                'value': field_data, # Store raw data on error
+                                'confidence': 'Low',
+                                'confidence_origin': "default_error_processing"
+                            }
 
             elif 'answer' in response_data and isinstance(response_data['answer'], str):
                 logger.info("Processing 'answer' as string (potential freeform JSON).")
@@ -153,16 +182,36 @@ def get_extraction_functions() -> Dict[str, Any]:
                         parsed_json = json.loads(json_str)
                         if isinstance(parsed_json, dict):
                             for field_key, field_data in parsed_json.items():
+                                extracted_value = None
+                                confidence_level = 'Medium'
+                                origin = "default_parsing_fallback"
+
                                 if isinstance(field_data, dict) and 'value' in field_data and ('confidence' in field_data):
                                     extracted_value = field_data['value']
-                                    confidence_level = field_data['confidence']
-                                    if confidence_level not in ['High', 'Medium', 'Low']:
+                                    original_ai_confidence = field_data['confidence']
+                                    if original_ai_confidence not in ['High', 'Medium', 'Low']:
                                         confidence_level = 'Medium'
-                                    processed_response[field_key] = extracted_value
-                                    processed_response[f'{field_key}_confidence'] = confidence_level
-                                else:
-                                    processed_response[field_key] = field_data
-                                    processed_response[f'{field_key}_confidence'] = 'Medium'
+                                        origin = "default_invalid_confidence"
+                                        logger.warning(f"Field {field_key}: AI returned invalid confidence '{original_ai_confidence}' in parsed JSON. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
+                                    else:
+                                        confidence_level = original_ai_confidence
+                                        origin = "ai_provided"
+                                elif isinstance(field_data, dict) and 'value' in field_data: # Value present, confidence missing
+                                    extracted_value = field_data['value']
+                                    confidence_level = 'Medium'
+                                    origin = "default_no_confidence"
+                                    logger.warning(f"Field {field_key}: AI response missing 'confidence' in parsed JSON. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
+                                else: # Not a dict with 'value' or not the expected structure
+                                    extracted_value = field_data
+                                    confidence_level = 'Medium'
+                                    origin = "default_parsing_fallback"
+                                    logger.warning(f"Field {field_key}: Unexpected structure in parsed JSON. Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
+                                
+                                processed_response[field_key] = {
+                                    'value': extracted_value,
+                                    'confidence': confidence_level,
+                                    'confidence_origin': origin
+                                }
                         else:
                             logger.warning(f"Parsed JSON from 'answer' string is not a dictionary: {parsed_json}")
                             processed_response['_raw_response'] = response_text
@@ -183,6 +232,7 @@ def get_extraction_functions() -> Dict[str, Any]:
                     for field_key, field_value in metadata.items():
                         extracted_value = field_value
                         confidence_level = 'Medium' # Default confidence
+                        origin = "default_parsing_fallback" # Default origin
                         try:
                             if isinstance(field_value, str) and field_value.strip().startswith('{') and field_value.strip().endswith('}'):
                                 try:
@@ -190,26 +240,47 @@ def get_extraction_functions() -> Dict[str, Any]:
                                     if isinstance(parsed_value, dict) and 'value' in parsed_value and ('confidence' in parsed_value):
                                         extracted_value = parsed_value['value']
                                         confidence_level = parsed_value['confidence']
-                                        if confidence_level not in ['High', 'Medium', 'Low']:
-                                            logger.warning(f"Field {field_key}: Unexpected confidence value '{confidence_level}', defaulting to Medium.")
+                                        original_ai_confidence = parsed_value['confidence']
+                                        if original_ai_confidence not in ['High', 'Medium', 'Low']:
                                             confidence_level = 'Medium'
-                                    else:
-                                        logger.warning(f"Field {field_key}: Parsed JSON but keys 'value' and 'confidence' not found. Using raw value.")
-                                        # extracted_value remains field_value
-                                        # confidence_level remains 'Medium'
+                                            origin = "default_invalid_confidence"
+                                            logger.warning(f"Field {field_key}: AI returned invalid confidence '{original_ai_confidence}' in parsed JSON (from entries). Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}")
+                                        else:
+                                            confidence_level = original_ai_confidence
+                                            origin = "ai_provided"
+                                    elif isinstance(parsed_value, dict) and 'value' in parsed_value: # Value present, confidence missing
+                                        extracted_value = parsed_value['value']
+                                        confidence_level = 'Medium'
+                                        origin = "default_no_confidence"
+                                        logger.warning(f"Field {field_key}: AI response missing 'confidence' in parsed JSON (from entries). Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}")
+                                    else: # Parsed JSON but not the expected structure
+                                        extracted_value = field_value 
+                                        confidence_level = 'Medium'
+                                        origin = "default_parsing_fallback"
+                                        logger.warning(f"Field {field_key}: Unexpected structure in parsed JSON (from entries). Defaulting to original value and confidence '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}, Original field value: {field_value}")
                                 except json.JSONDecodeError:
-                                    logger.warning(f"Field {field_key}: Failed to parse potential JSON value '{field_value}'. Using raw value.")
-                                    # extracted_value remains field_value
-                                    # confidence_level remains 'Medium'
+                                    extracted_value = field_value 
+                                    confidence_level = 'Medium'
+                                    origin = "default_parsing_fallback"
+                                    logger.warning(f"Field {field_key}: Failed to parse potential JSON value (from entries). Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw field value: '{field_value}'")
                             else:
-                                # Value is not a JSON string, use as is with Medium confidence
-                                logger.info(f'Field {field_key}: Value is not the expected JSON format. Using raw value and Medium confidence.')
-                            processed_response[field_key] = extracted_value
-                            processed_response[f'{field_key}_confidence'] = confidence_level
+                                extracted_value = field_value 
+                                confidence_level = 'Medium'
+                                origin = "default_no_confidence" # If not JSON, AI didn't provide confidence structure
+                                logger.info(f"Field {field_key}: Value is not a JSON string (from entries). Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw field value: '{field_value}'")
+                            
+                            processed_response[field_key] = {
+                                'value': extracted_value,
+                                'confidence': confidence_level,
+                                'confidence_origin': origin
+                            }
                         except Exception as e:
-                            logger.error(f"Error processing field {field_key} with value '{field_value}': {str(e)}")
-                            processed_response[field_key] = field_value # Store raw data on error
-                            processed_response[f'{field_key}_confidence'] = 'Low'
+                            logger.error(f"Error processing field {field_key} with value '{field_value}' (from entries): {str(e)}. Assigning Low confidence and default_error_processing origin.")
+                            processed_response[field_key] = {
+                                'value': field_value, # Store raw data on error
+                                'confidence': 'Low',
+                                'confidence_origin': "default_error_processing"
+                            }
                 else:
                     logger.warning(f"No 'metadata' field found in the structured API entry: {entry}")
                     processed_response['_error'] = "No 'metadata' field in API entry"
@@ -287,19 +358,37 @@ def get_extraction_functions() -> Dict[str, Any]:
                         parsed_json = json.loads(json_str)
                         if isinstance(parsed_json, dict):
                             for key, value_confidence_pair in parsed_json.items():
+                                extracted_val = None
+                                confidence_val = 'Medium'
+                                origin = "default_parsing_fallback" # Default, will be overridden
+
                                 if isinstance(value_confidence_pair, dict) and 'value' in value_confidence_pair and 'confidence' in value_confidence_pair:
                                     extracted_val = value_confidence_pair['value']
-                                    confidence_val = value_confidence_pair['confidence']
-                                    if confidence_val not in ['High', 'Medium', 'Low']:
-                                        logger.warning(f"Field {key}: Unexpected confidence '{confidence_val}', defaulting to Medium.")
+                                    original_ai_confidence = value_confidence_pair['confidence']
+                                    if original_ai_confidence not in ['High', 'Medium', 'Low']:
                                         confidence_val = 'Medium'
-                                    processed_response[key] = extracted_val
-                                    processed_response[f'{key}_confidence'] = confidence_val
+                                        origin = "default_invalid_confidence"
+                                        logger.warning(f"Field {key} (freeform): AI returned invalid confidence '{original_ai_confidence}'. Defaulting to '{confidence_val}'. Origin: '{origin}'. Raw AI data for field: {value_confidence_pair}")
+                                    else:
+                                        confidence_val = original_ai_confidence
+                                        origin = "ai_provided"
+                                elif isinstance(value_confidence_pair, dict) and 'value' in value_confidence_pair: # Value present, confidence missing
+                                    extracted_val = value_confidence_pair['value']
+                                    confidence_val = 'Medium'
+                                    origin = "default_no_confidence"
+                                    logger.warning(f"Field {key} (freeform): AI response missing 'confidence'. Defaulting to '{confidence_val}'. Origin: '{origin}'. Raw AI data for field: {value_confidence_pair}")
                                 else:
                                     # If not in value/confidence format, take the value as is
-                                    logger.warning(f"Field {key}: Unexpected format {value_confidence_pair}. Using raw value and Medium confidence.")
-                                    processed_response[key] = value_confidence_pair
-                                    processed_response[f'{key}_confidence'] = 'Medium'
+                                    extracted_val = value_confidence_pair 
+                                    confidence_val = 'Medium'
+                                    origin = "default_parsing_fallback"
+                                    logger.warning(f"Field {key} (freeform): Unexpected AI data format. Defaulting to value '{extracted_val}' and confidence '{confidence_val}'. Origin: '{origin}'. Raw AI data for field: {value_confidence_pair}")
+                                
+                                processed_response[key] = {
+                                    'value': extracted_val,
+                                    'confidence': confidence_val,
+                                    'confidence_origin': origin
+                                }
                         else:
                             logger.warning(f"Parsed JSON from 'answer' string is not a dictionary: {parsed_json}. Storing raw answer.")
                             processed_response['_raw_answer'] = response_text

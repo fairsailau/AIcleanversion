@@ -18,6 +18,34 @@ def get_confidence_color(confidence_level):
     else:
         return 'gray'
 
+def format_ai_confidence_display(ai_confidence: str, ai_confidence_origin: str) -> tuple[str, str]:
+    """
+    Formats AI confidence display text and tooltip based on its origin.
+    """
+    display_text = ai_confidence
+    tooltip_text = ""
+
+    if ai_confidence_origin == "ai_provided" or not ai_confidence_origin:
+        tooltip_text = "Confidence score directly provided by AI."
+    else:
+        display_text = f"{ai_confidence}*"
+        if ai_confidence_origin == "default_no_confidence":
+            tooltip_text = "Confidence defaulted by script (AI did not provide a score)."
+        elif ai_confidence_origin == "default_invalid_confidence":
+            tooltip_text = "Confidence defaulted by script (AI provided an invalid score)."
+        elif ai_confidence_origin == "default_null_value":
+            tooltip_text = "Confidence defaulted by script (AI returned null for the field)."
+        elif ai_confidence_origin == "default_parsing_fallback":
+            tooltip_text = "Confidence defaulted by script (fallback due to AI response structure)."
+        elif ai_confidence_origin == "default_error_processing":
+            tooltip_text = "Confidence defaulted by script (error during field processing)."
+        elif ai_confidence_origin == "error_default": # From processing.py error path
+             tooltip_text = "Confidence defaulted by script (error during overall processing)."
+        else: # Covers "unknown_origin" or any other new default types
+            tooltip_text = f"Confidence origin: {ai_confidence_origin} (may have been defaulted by script)."
+            
+    return display_text, tooltip_text
+
 def view_results():
     """
     View and manage extraction results.
@@ -169,7 +197,12 @@ def view_results():
         fields_in_item = data_item.get('fields', {})
         for key, field_details in fields_in_item.items():
             row[key] = field_details.get('value', '')
-            row[f'{key} AI Conf.'] = field_details.get('ai_confidence', 'N/A')
+            
+            ai_confidence = field_details.get('ai_confidence', 'N/A')
+            ai_confidence_origin = field_details.get('ai_confidence_origin', 'unknown_origin') # Fetch origin
+            display_conf, _ = format_ai_confidence_display(ai_confidence, ai_confidence_origin) # Use helper
+            row[f'{key} AI Conf.'] = display_conf # Use display_text from helper
+
             row[f'{key} Valid. Status'] = field_details.get('field_validation_status', 'N/A')
             row[f'{key} Adj. Conf.'] = field_details.get('adjusted_confidence', 'N/A')
         table_data_for_df.append(row)
@@ -273,14 +306,24 @@ def view_results():
                 fields_to_display = detailed_data.get('fields', {})
                 for key, field_info in fields_to_display.items():
                     val = field_info.get('value', '')
-                    ai_conf = field_info.get('ai_confidence', 'N/A')
+                    ai_conf_val = field_info.get('ai_confidence', 'N/A') # Renamed to avoid clash
+                    ai_conf_origin = field_info.get('ai_confidence_origin', 'unknown_origin') # Fetch origin
                     adj_conf = field_info.get('adjusted_confidence', 'N/A')
                     val_status = field_info.get('field_validation_status', 'N/A')
+
+                    display_conf, tooltip_conf = format_ai_confidence_display(ai_conf_val, ai_conf_origin)
                     
                     # Display field value and confidences
                     st.markdown(f"**{key}**: `{val}`")
-                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;AI Confidence: <span style='color:{get_confidence_color(ai_conf)};'>{ai_conf}</span> | Validation Status: <span style='color:{style_confidence_and_status(val_status).split(':')[1].strip()};'>{val_status}</span> | Adjusted Confidence: <span style='color:{get_confidence_color(adj_conf)};'>{adj_conf}</span>", unsafe_allow_html=True)
                     
+                    ai_conf_html = f"<span style='color:{get_confidence_color(ai_conf_val)};' title='{tooltip_conf}'>{display_conf}</span>"
+                    # Using ai_conf_val for color, but display_conf for the text (which includes *)
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;AI Confidence: {ai_conf_html} | Validation Status: <span style='color:{style_confidence_and_status(val_status).split(':')[1].strip()};'>{val_status}</span> | Adjusted Confidence: <span style='color:{get_confidence_color(adj_conf)};'>{adj_conf}</span>", unsafe_allow_html=True)
+                    
+                    # If title attribute doesn't work for tooltip, use caption
+                    if "*" in display_conf:
+                        st.caption(f"      └ AI Confidence Origin: {tooltip_conf}")
+
                     # Display validation rule details for this field
                     validations = field_info.get('validations', [])
                     if validations:

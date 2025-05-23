@@ -366,9 +366,16 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 
                 logger.info(f"Validating with template_id={template_id_for_validation}, doc_category={doc_category}")
                 
+                # Create a temporary flat dictionary for the validator
+                flat_metadata_for_validation = {
+                    key: data['value'] for key, data in extracted_metadata.items() 
+                    if isinstance(data, dict) and 'value' in data and not key.startswith('_')
+                }
+                logger.info(f"Flat metadata for validation: {flat_metadata_for_validation}")
+
                 # Use the enhanced validation method that supports category-template specific rules
                 validation_output = st.session_state.validator.validate(
-                    ai_response=extracted_metadata,
+                    ai_response=flat_metadata_for_validation, # Pass the flat dictionary
                     doc_type=None,  # doc_type is no longer used in validation
                     doc_category=doc_category,
                     template_id=template_id_for_validation
@@ -393,30 +400,35 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                         continue
                         
                     # Get field value and confidence
-                    if isinstance(field_data, dict):
-                        value = field_data.get('value', '')
-                        confidence = field_data.get('confidence', 'Low')
-                    else:
-                        value = field_data
-                        confidence = 'Low'
+                    # Get field value, confidence, and origin
+                    value = field_data.get('value', '') # field_data is from extraction_output (extracted_metadata)
+                    ai_confidence_qualitative = field_data.get('confidence', 'Low')
+                    ai_confidence_origin = field_data.get('confidence_origin', 'unknown_origin')
                     
                     # Get validation details
                     field_validation = validation_output.get('field_validations', {}).get(field_key, {})
                     validation_status = field_validation.get('status', 'skip')
                     validation_messages = field_validation.get('messages', [])
                     
-                    # Get adjusted confidence details
-                    adjusted_confidence = confidence_output.get(field_key, {})
+                    # Get adjusted confidence details from confidence_output (output of ConfidenceAdjuster)
+                    adjusted_confidence_details = confidence_output.get(field_key, {})
                     
                     fields_for_ui[field_key] = {
                         'value': value,
-                        'ai_confidence': confidence,
-                        'ai_confidence_qualitative': confidence if isinstance(confidence, str) else st.session_state.confidence_adjuster._get_qualitative_confidence(float(confidence)),
+                        'ai_confidence_qualitative': ai_confidence_qualitative, # Already qualitative from extraction
+                        'ai_confidence_origin': ai_confidence_origin, # Newly added
                         'validation_status': validation_status,
                         'validation_messages': validation_messages,
-                        'adjusted_confidence': adjusted_confidence.get('confidence', 0.0),
-                        'adjusted_confidence_qualitative': adjusted_confidence.get('confidence_qualitative', 'Low')
+                        'adjusted_confidence_numeric': adjusted_confidence_details.get('confidence', 0.0),
+                        'adjusted_confidence_qualitative': adjusted_confidence_details.get('confidence_qualitative', 'Low')
                     }
+                    logger.info(
+                        f"Field Confidence Journey for '{field_key}' in file '{file_name}': "
+                        f"Initial AI Confidence: '{ai_confidence_qualitative}' (Origin: '{ai_confidence_origin}'), "
+                        f"Validation Status: '{validation_status}', "
+                        f"Adjusted Confidence (Numeric): {adjusted_confidence_details.get('confidence', 0.0):.2f}, "
+                        f"Adjusted Confidence (Qualitative): '{adjusted_confidence_details.get('confidence_qualitative', 'Low')}'"
+                    )
                 
                 # Calculate document-level validation summary
                 mandatory_check = validation_output.get('mandatory_check', {})
@@ -448,21 +460,24 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     "document_type": current_doc_type,
                     "template_id_used_for_extraction": template_id_for_validation,
                     "fields": {
+                        # field_key_from_ui is 'field_key', data_from_ui is 'field_data' in this context
                         field_key: {
                             "value": field_data.get('value', ''),
-                            "ai_confidence": field_data.get('ai_confidence', 'Low'),
-                            "adjusted_confidence": field_data.get('adjusted_confidence_qualitative', 'Low'),
+                            "ai_confidence": field_data.get('ai_confidence_qualitative', 'Low'), # Using the qualitative AI confidence
+                            "ai_confidence_origin": field_data.get('ai_confidence_origin', 'unknown_origin'), # NEW
+                            "adjusted_confidence": field_data.get('adjusted_confidence_qualitative', 'Low'), # Using the qualitative adjusted confidence
                             "field_validation_status": field_data.get('validation_status', 'skip').lower(),
                             "validations": [
                                 {
-                                    "rule_type": "field_validation",
+                                    "rule_type": "field_validation", # This could be more dynamic if rules have types
                                     "status": field_data.get('validation_status', 'skip'),
                                     "message": ". ".join(field_data.get('validation_messages', [])),
-                                    "confidence_impact": field_data.get('adjusted_confidence', 0.0)
+                                    # Storing numeric adjusted confidence here if needed, or qualitative impact
+                                    "confidence_impact_numeric": field_data.get('adjusted_confidence_numeric', 0.0) 
                                 }
                             ]
                         }
-                        for field_key, field_data in fields_for_ui.items()
+                        for field_key, field_data in fields_for_ui.items() # Iterating through the previously prepared fields_for_ui
                     },
                     "document_validation_summary": {
                         "mandatory_fields_status": document_summary_for_ui.get('mandatory_status', 'fail').lower(),
@@ -501,28 +516,58 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     logger.error(f"No extraction function for freeform mode. Skipping file {file_name}.")
                     continue
                 
-                # Perform the extraction
-                extracted_metadata = extraction_func(file_id=file_id)
+                # Determine the Correct Prompt for freeform extraction
+                # Default prompt from metadata_config or a fallback
+                default_prompt = metadata_config.get('freeform_prompt', 'Extract key metadata from this document including dates, names, amounts, and other important information.')
+                current_prompt_to_use = default_prompt
+                
+                if current_doc_type: # current_doc_type is determined earlier in the loop
+                    doc_specific_prompts = metadata_config.get('document_type_prompts', {})
+                    current_prompt_to_use = doc_specific_prompts.get(current_doc_type, default_prompt)
+                
+                logger.info(f"Using prompt for freeform extraction on file {file_name} (doc type: {current_doc_type}): {current_prompt_to_use}")
+                
+                # Perform the extraction with all required arguments
+                extracted_metadata = extraction_func(
+                    client=client,
+                    file_id=file_id,
+                    prompt=current_prompt_to_use,
+                    ai_model=ai_model
+                )
                 
                 # Build UI structure for freeform results with consistent format
                 fields_for_ui = {}
                 if isinstance(extracted_metadata, dict):
-                    for field_key, value in extracted_metadata.items():
-                        field_value = value.get("value", value) if isinstance(value, dict) else value
+                    for field_key, field_data_from_extraction in extracted_metadata.items():
+                        if field_key.startswith('_'): # Skip internal keys like _raw_answer
+                            continue
+                        
+                        # field_data_from_extraction is expected to be {'value': ..., 'confidence': ..., 'confidence_origin': ...}
+                        value = field_data_from_extraction.get('value', field_data_from_extraction) # Fallback if not dict
+                        ai_confidence_qualitative = field_data_from_extraction.get('confidence', 'Medium')
+                        ai_confidence_origin = field_data_from_extraction.get('confidence_origin', 'unknown_origin')
+
                         fields_for_ui[field_key] = {
-                            "value": field_value,
-                            "ai_confidence": "Medium",
-                            "adjusted_confidence": "Medium",
-                            "field_validation_status": "skip",
-                            "validations": [
+                            "value": value,
+                            "ai_confidence": ai_confidence_qualitative, # Using this key for consistency
+                            "ai_confidence_origin": ai_confidence_origin,
+                            "adjusted_confidence": ai_confidence_qualitative, # In freeform, adjusted is same as AI
+                            "field_validation_status": "skip", # No validation in freeform
+                            "validations": [ # Placeholder for consistent structure
                                 {
                                     "rule_type": "field_validation",
                                     "status": "skip",
                                     "message": "",
-                                    "confidence_impact": 0.0
+                                    "confidence_impact_numeric": 0.0 
                                 }
                             ]
                         }
+                        logger.info(
+                            f"Field Confidence Journey for '{field_key}' in file '{file_name}' (Freeform): "
+                            f"Initial AI Confidence: '{ai_confidence_qualitative}' (Origin: '{ai_confidence_origin}'), "
+                            f"Validation Status: 'skip' (Freeform), "
+                            f"Adjusted Confidence (Qualitative): '{ai_confidence_qualitative}'" # Mirrored from AI for freeform
+                        )
                 
                 # Create result data with consistent structure
                 result_data = {
@@ -532,10 +577,20 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     "document_type": current_doc_type,
                     "extraction_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "processing_mode": processing_mode,
-                    "raw_extraction": extracted_metadata,
-                    "fields": fields_for_ui,
+                    "raw_extraction": extracted_metadata, # This is the full structured response from extraction
+                    "fields": { # This structure should match the one in structured path for consistency in results_viewer
+                        key: {
+                            "value": data.get("value", ""),
+                            "ai_confidence": data.get("ai_confidence", "Medium"),
+                            "ai_confidence_origin": data.get("ai_confidence_origin", "unknown_origin"),
+                            "adjusted_confidence": data.get("adjusted_confidence", "Medium"), # Usually same as AI for freeform
+                            "field_validation_status": data.get("field_validation_status", "skip").lower(),
+                            "validations": data.get("validations", [])
+                        }
+                        for key, data in fields_for_ui.items()
+                    },
                     "document_validation_summary": {
-                        "mandatory_fields_status": "pass",
+                        "mandatory_fields_status": "pass", # Default for freeform
                         "missing_mandatory_fields": [],
                         "cross_field_status": "pass",
                         "overall_document_confidence_suggestion": "Medium"
@@ -583,20 +638,29 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 
             # Build fields with consistent format for error case
             fields_for_ui = {}
-            if isinstance(raw_data, dict):
-                for field_key, value in raw_data.items():
-                    field_value = value.get("value", value) if isinstance(value, dict) else value
+            if isinstance(raw_data, dict): # raw_data is extracted_metadata in this context
+                for field_key, field_data_from_extraction in raw_data.items():
+                    if field_key.startswith('_'): # Skip internal keys
+                        continue
+
+                    # field_data_from_extraction is expected to be {'value': ..., 'confidence': ..., 'confidence_origin': ...}
+                    # or it could be a simple value if extraction failed very early or returned unexpected format
+                    value = field_data_from_extraction.get('value', field_data_from_extraction) if isinstance(field_data_from_extraction, dict) else field_data_from_extraction
+                    ai_confidence_qualitative = field_data_from_extraction.get('confidence', 'Low') if isinstance(field_data_from_extraction, dict) else 'Low'
+                    ai_confidence_origin = field_data_from_extraction.get('confidence_origin', 'error_default') if isinstance(field_data_from_extraction, dict) else 'error_default'
+                    
                     fields_for_ui[field_key] = {
-                        "value": field_value,
-                        "ai_confidence": "Low",
-                        "adjusted_confidence": "Low",
-                        "field_validation_status": "skip",
+                        "value": value,
+                        "ai_confidence": ai_confidence_qualitative, 
+                        "ai_confidence_origin": ai_confidence_origin,
+                        "adjusted_confidence": ai_confidence_qualitative, # Adjusted is same as AI in error/freeform
+                        "field_validation_status": "error", # Mark as error
                         "validations": [
                             {
-                                "rule_type": "field_validation",
+                                "rule_type": "processing_error",
                                 "status": "error",
                                 "message": f"Processing error: {str(e)}",
-                                "confidence_impact": 0.0
+                                "confidence_impact_numeric": 0.0
                             }
                         ]
                     }
@@ -605,15 +669,25 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     "file_name": file_name,
                     "file_id": file_id,
                     "file_type": file_data.get("type", "unknown"),
-                    "document_type": current_doc_type,
+                    "document_type": current_doc_type, # This might be None if categorization also failed or wasn't run
                     "extraction_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "processing_mode": processing_mode,
-                    "raw_extraction": raw_data,
+                    "raw_extraction": raw_data, # Full original extraction attempt
                     "error": str(e),
-                    "fields": fields_for_ui,
+                    "fields": { # This structure should match the one in structured/freeform paths
+                        key: {
+                            "value": data.get("value", ""),
+                            "ai_confidence": data.get("ai_confidence", "Low"),
+                            "ai_confidence_origin": data.get("ai_confidence_origin", "error_default"),
+                            "adjusted_confidence": data.get("adjusted_confidence", "Low"),
+                            "field_validation_status": data.get("field_validation_status", "error").lower(),
+                            "validations": data.get("validations", [])
+                        }
+                        for key, data in fields_for_ui.items()
+                    },
                     "document_validation_summary": {
-                        "mandatory_fields_status": "fail",
-                        "missing_mandatory_fields": [],
+                        "mandatory_fields_status": "fail", # Default for error
+                        "missing_mandatory_fields": [], # Unknown in error cases often
                         "cross_field_status": "fail",
                         "overall_document_confidence_suggestion": "Low"
                     },
