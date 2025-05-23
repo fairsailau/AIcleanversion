@@ -152,24 +152,55 @@ def get_fields_for_ai_from_template(scope, template_key):
             schema = client.metadata_template(scope, template_key).get()
             
             # Box API returns a MetadataTemplate object that needs conversion to dictionary
-            if hasattr(schema, 'fields') and not isinstance(schema, dict):
-                # Convert MetadataTemplate object to dictionary format expected by the rest of the code
+            if hasattr(schema, 'fields') and not isinstance(schema, dict): # This condition correctly identifies SDK object paths
                 temp_fields = []
-                for field in schema.fields:
+                for field_sdk_obj in schema.fields: # field_sdk_obj is an SDK Field object from schema.fields list
                     field_dict = {}
-                    for attr in ['key', 'type', 'displayName', 'description', 'options']:
-                        if hasattr(field, attr):
-                            field_dict[attr] = getattr(field, attr)
-                    temp_fields.append(field_dict)
+                    try:
+                        # Required fields from the SDK object
+                        field_dict['key'] = field_sdk_obj.key
+                        field_dict['type'] = field_sdk_obj.type
+                        field_dict['displayName'] = field_sdk_obj.displayName
+                        
+                        # Optional fields - check presence and ensure they are not None before adding
+                        if hasattr(field_sdk_obj, 'description') and field_sdk_obj.description is not None:
+                            field_dict['description'] = field_sdk_obj.description
+                        
+                        # Options are typically a list of option objects/dicts.
+                        # The AI prompt might need a simplified list of strings or just the raw options list.
+                        # For now, copy it if present and not None.
+                        if hasattr(field_sdk_obj, 'options') and field_sdk_obj.options is not None:
+                            field_dict['options'] = field_sdk_obj.options
+                        
+                        # Only append if essential keys were found (especially 'key')
+                        if field_dict.get('key'):
+                            temp_fields.append(field_dict)
+                        else:
+                            logger.warning(f"SDK Field object did not yield a 'key'. Object: {field_sdk_obj}")
+
+                    except AttributeError as e:
+                        logger.error(f"AttributeError accessing SDK Field object properties: {e}. Field object: {field_sdk_obj}")
+                    except Exception as e:
+                        logger.error(f"Unexpected error processing SDK Field object: {e}. Field object: {field_sdk_obj}")
                 
                 schema_details = {
-                    'displayName': getattr(schema, 'displayName', template_key),
+                    'displayName': getattr(schema, 'displayName', template_key), # Ensure displayName is also safe
                     'fields': temp_fields
                 }
-                logger.info(f"Converted MetadataTemplate object to dictionary with {len(temp_fields)} fields")
+                logger.info(f"Converted MetadataTemplate SDK object to dictionary. Found {len(temp_fields)} fields.")
             else:
-                # It's already a dictionary or some other format
-                schema_details = schema
+                # This path is if 'schema' is already a dict (e.g. from JSON response)
+                # This part should be mostly correct already if 'schema' is a dict from Box API JSON.
+                schema_details = schema 
+                # Ensure that if this path is taken, schema_details['fields'] contains dicts, not SDK objects.
+                # If schema_details['fields'] could contain SDK objects, they'd need similar conversion.
+                # However, the problem described by logs points to the SDK object path above.
+                if isinstance(schema_details, dict) and 'fields' in schema_details and isinstance(schema_details['fields'], list):
+                    # If schema_details['fields'] contains non-dict items that are SDK objects, they need conversion.
+                    # For now, assume if schema_details is a dict, its 'fields' are also dicts (JSON standard).
+                     logger.info("Schema is already a dictionary. Using its 'fields' attribute directly.")
+                else:
+                     logger.warning(f"Schema was expected to be a dictionary with a 'fields' list, but it's not. Type: {type(schema_details)}")
             
             # Cache the schema
             st.session_state.schema_cache[cache_key] = schema_details
