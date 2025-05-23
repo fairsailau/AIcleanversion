@@ -196,61 +196,75 @@ def get_fields_for_ai_from_template(scope, template_key):
         
         # Format this as a clean list for the AI model
         ai_fields = []
-        for field in fields_list:
-            if isinstance(field, dict):
-                field_key = field.get('key')
-                if not field_key:
-                    continue  # Skip fields without keys
+        if isinstance(fields_list, list): # Ensure fields_list is actually a list
+            for field in fields_list:
+                if isinstance(field, dict):
+                    try:
+                        field_key = field['key'] # Direct access
+                        if not field_key:
+                            logger.warning(f"Skipping field in schema because 'key' is missing or empty. Field data: {field}")
+                            continue
+                    except KeyError:
+                        logger.warning(f"Skipping field in schema because 'key' attribute is missing. Field data: {field}")
+                        continue
+
+                    # Proceed to build field_for_ai as before
+                    field_for_ai = {
+                        'key': field_key,
+                        'type': field.get('type', 'string'), # .get() is fine for optional/defaulted attributes
+                        'displayName': field.get('displayName', field_key)
+                    }
+                    if 'description' in field and field.get('description'): # Ensure description has content
+                        field_for_ai['description'] = field['description']
                     
-                # Only include essential fields for AI extraction
-                field_for_ai = {
-                    'key': field_key,
-                    'type': field.get('type', 'string'),
-                    'displayName': field.get('displayName', field_key)
-                }
-                
-                # Add description if available - helpful context for AI
-                if 'description' in field and field['description']:
-                    field_for_ai['description'] = field['description']
+                    # For options, ensure they are only added if type is enum/multiSelect and options are non-empty
+                    field_type = field.get('type')
+                    if field_type in ['enum', 'multiSelect'] and 'options' in field and field.get('options'):
+                        field_for_ai['options'] = field['options']
                     
-                # If enum, include options
-                if 'options' in field and field['options']:
-                    field_for_ai['options'] = field['options']
-                ai_fields.append(field_for_ai)
-            elif hasattr(field, 'key') and getattr(field, 'key'):
-                # Handle if field is an object with attributes
-                field_key = getattr(field, 'key')
-                field_for_ai = {
-                    'key': field_key,
-                    'type': getattr(field, 'type', 'string'),
-                    'displayName': getattr(field, 'displayName', field_key)
-                }
-                
-                # Add description if available
-                if hasattr(field, 'description') and getattr(field, 'description'):
-                    field_for_ai['description'] = getattr(field, 'description')
+                    ai_fields.append(field_for_ai)
+                elif hasattr(field, 'key') and getattr(field, 'key', None): # Ensure getattr has a default for safety
+                    # This is the alternative path for SDK-like objects, ensure similar robustness if taken.
+                    # For now, primary focus is the dict path as logs suggest conversion to dict happens.
+                    # If this path needs changes, it would mirror the dict path's robustness.
+                    # Keeping original logic for this branch for now unless it's identified as the one being taken.
+                    field_key = getattr(field, 'key')
+                    field_for_ai = {
+                        'key': field_key,
+                        'type': getattr(field, 'type', 'string'),
+                        'displayName': getattr(field, 'displayName', field_key)
+                    }
+                    if hasattr(field, 'description') and getattr(field, 'description', None):
+                        field_for_ai['description'] = getattr(field, 'description')
                     
-                # If enum, include options
-                if hasattr(field, 'options') and getattr(field, 'options'):
-                    field_for_ai['options'] = getattr(field, 'options')
-                ai_fields.append(field_for_ai)
-        
-        logger.info(f"Extracted {len(ai_fields)} AI fields from template schema")
-        if ai_fields:  # Only return if we have at least one field
+                    sdk_field_type = getattr(field, 'type', None)
+                    if sdk_field_type in ['enum', 'multiSelect'] and hasattr(field, 'options') and getattr(field, 'options', None):
+                        field_for_ai['options'] = getattr(field, 'options')
+                    ai_fields.append(field_for_ai)
+                else:
+                    logger.warning(f"Skipping field in schema due to unexpected type or missing key. Field data: {field}")
+        else:
+            logger.warning(f"fields_list is not a list, it's a {type(fields_list)}. Cannot process for AI fields. Schema details: {schema_details}")
+
+        logger.info(f"Extracted {len(ai_fields)} AI fields from template schema. Original schema fields count: {len(fields_list) if isinstance(fields_list, list) else 'N/A'}") # Original log line
+        if ai_fields: # If any fields were successfully processed
             return ai_fields
         else:
-            logger.warning(f"No fields were extracted from the schema although schema contained {len(fields_list)} field definitions")
-            # Return a non-empty array with placeholder if no fields were extracted but schema had fields
-            if fields_list:
-                return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
-            return []
+            # If fields_list was originally empty, or all fields from it were skipped
+            # The check 'isinstance(fields_list, list)' is important because fields_list might not be a list if schema parsing failed earlier
+            if not isinstance(fields_list, list) or not fields_list: 
+                 logger.warning(f"Schema's fields_list was empty or not a list (type: {type(fields_list)}). No fields to process. Schema details: {schema_details}")
+                 return [] # Return empty list if schema had no fields or fields_list was malformed
+            else: # fields_list had items, but none were convertible to ai_fields
+                 logger.warning(f"No AI fields could be extracted from the {len(fields_list)} fields in the schema. Returning empty list for AI call. Fields list from schema: {fields_list}")
+                 return [] # CRITICAL: Return empty list, not placeholder, if schema had fields but we failed to process them.
     elif schema_details is None: # Explicitly handle None case (error fetching schema)
         logger.error(f"Schema for {scope}/{template_key} could not be retrieved (returned None).")
-        return None
-    else: # Handle empty schema or other unexpected formats
-        logger.warning(f"Schema for {scope}/{template_key} is empty or not in expected dict format: {schema_details}")
-        # Return a placeholder field instead of empty list to prevent processing from stopping
-        return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
+        return None # Returning None indicates an error in fetching schema, distinct from empty fields
+    else: # Handle empty schema or other unexpected formats (schema_details is not a dict)
+        logger.warning(f"Schema for {scope}/{template_key} is not in expected dict format: {type(schema_details)}. Raw schema_details: {schema_details}")
+        # If schema_details itself is not a dict, it implies a more fundamental issue than just empty fields.
+        return [] # Return empty list; avoid placeholder. Let AI decide what to do with no specific fields.
 
 def process_files_with_progress(files_to_process: List[Dict[str, Any]], extraction_functions: Dict[str, Any], batch_size: int, processing_mode: str):
     """
