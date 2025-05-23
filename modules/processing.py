@@ -495,6 +495,10 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 }
                 logger.info(f"PROC_LOG_document_summary_for_ui_CREATED: {document_summary_for_ui}")
 
+                # As per instructions, use a temporary variable for logging then assignment:
+                val_to_store_for_overall_sugg = document_summary_for_ui.get('overall_confidence_qualitative', 'Low') 
+                logger.info(f"PROC_LOG_STORING_overall_suggestion_AS: {val_to_store_for_overall_sugg}")
+                
                 # Store the results in session state with the structure expected by results_viewer.py
                 st.session_state.extraction_results[file_id] = {
                     "file_name": file_name,
@@ -524,11 +528,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                         "mandatory_fields_status": document_summary_for_ui.get('mandatory_status', 'fail').lower(),
                         "missing_mandatory_fields": document_summary_for_ui.get('missing_fields', []),
                         "cross_field_status": "pass",  # Default to pass if not using cross-field validation
-                        # "overall_document_confidence_suggestion": document_summary_for_ui.get('overall_confidence_qualitative', 'Low')
-                        # As per instructions, use a temporary variable for logging then assignment:
-                        val_to_store_for_overall_sugg = document_summary_for_ui.get('overall_confidence_qualitative', 'Low') 
-                        logger.info(f"PROC_LOG_STORING_overall_suggestion_AS: {val_to_store_for_overall_sugg}")
-                        "overall_document_confidence_suggestion": val_to_store_for_overall_sugg,
+                        "overall_document_confidence_suggestion": val_to_store_for_overall_sugg, # Corrected usage
                     },
                     "raw_ai_response": extracted_metadata  # Store the raw response for reference
                 }
