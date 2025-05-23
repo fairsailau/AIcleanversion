@@ -464,27 +464,53 @@ class ConfidenceAdjuster:
     
     def get_overall_document_status(self, adjusted_confidence_output: Dict[str, Any], validation_output: Dict[str, Any]) -> Dict[str, str]:
         """Get the overall document confidence status after adjustments"""
-        # Calculate the average adjusted confidence across all fields
+        logger.debug(f"GDS_ADJUSTED_CONF_INPUT: {adjusted_confidence_output}")
+        logger.debug(f"GDS_VALIDATION_OUTPUT_INPUT: {validation_output}")
+
         confidence_values = []
         for field_key, field_data in adjusted_confidence_output.items():
             if isinstance(field_data, dict) and "confidence" in field_data:
-                confidence_values.append(field_data.get("confidence", 0.0))
+                numeric_conf = field_data.get("confidence", 0.0)
+                logger.debug(f"GDS_FIELD_FOR_AVG: key='{field_key}', numeric_conf={numeric_conf}")
+                confidence_values.append(numeric_conf)
+            else:
+                logger.debug(f"GDS_SKIPPING_FIELD_FOR_AVG: key='{field_key}', data={field_data}")
+        
+        logger.debug(f"GDS_CONF_VALUES_LIST_FOR_AVG: {confidence_values}")
         
         avg_confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
-        overall_confidence_qualitative = self._get_qualitative_confidence(avg_confidence)
+        logger.info(f"GDS_AVG_CONFIDENCE_CALCULATED: {avg_confidence:.4f}") 
         
-        # Factor in mandatory fields status
+        overall_confidence_qualitative_from_avg = self._get_qualitative_confidence(avg_confidence)
+        logger.info(f"GDS_QUALITATIVE_FROM_AVG: {overall_confidence_qualitative_from_avg}")
+        
+        overall_confidence_qualitative_final = overall_confidence_qualitative_from_avg
+
         mandatory_check = validation_output.get("mandatory_check", {})
-        mandatory_status = mandatory_check.get("status", "Failed")
+        logger.debug(f"GDS_MANDATORY_CHECK_DICT: {mandatory_check}")
+        mandatory_status = mandatory_check.get("status", "Failed") 
+        logger.info(f"GDS_MANDATORY_STATUS: {mandatory_status}")
         
         messages = []
         if mandatory_status == "Failed":
-            messages.append(f"Document is missing mandatory fields: {', '.join(mandatory_check.get('missing_fields', []))}.")
-            if overall_confidence_qualitative != "low":
-                overall_confidence_qualitative = "medium"  # Lower high confidence if mandatory fields missing
-        
+            missing_fields_list = mandatory_check.get('missing_fields', [])
+            logger.warning(f"GDS_MANDATORY_CHECK_FAILED. Missing fields: {missing_fields_list}")
+            messages.append(f"Document is missing mandatory fields: {', '.join(missing_fields_list)}.")
+            if overall_confidence_qualitative_final != "Low": 
+                logger.info(f"GDS_DOWNGRADING_CONFIDENCE: From '{overall_confidence_qualitative_final}' to 'Medium' due to failed mandatory check.")
+                overall_confidence_qualitative_final = "Medium" 
+            else:
+                logger.info(f"GDS_CONFIDENCE_ALREADY_LOW: '{overall_confidence_qualitative_final}', not changing due to failed mandatory check.")
+        else:
+            logger.info("GDS_MANDATORY_CHECK_PASSED: No confidence downgrade due to mandatory fields.")
+
         if confidence_values:
-            messages.append(f"Average confidence: {avg_confidence:.2f}.")
-            messages.append(f"Document status is {overall_confidence_qualitative}.")
+            messages.append(f"Average field confidence: {avg_confidence:.2f} ({overall_confidence_qualitative_from_avg}).")
+        else:
+            messages.append("No field confidences available to calculate average.")
+
+        messages.append(f"Mandatory fields status: {mandatory_status}.")
+        messages.append(f"Final overall document status determined as: {overall_confidence_qualitative_final}.")
             
-        return {"status": overall_confidence_qualitative, "messages": messages}
+        logger.info(f"GDS_FINAL_RETURNED_STATUS: {overall_confidence_qualitative_final}")
+        return {"status": overall_confidence_qualitative_final, "messages": messages}
