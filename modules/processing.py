@@ -396,6 +396,11 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 if not isinstance(extracted_metadata, dict):
                     logger.warning(f"AI extraction for file {file_name} (ID: {file_id}) did not return a dictionary. Received: {extracted_metadata}")
                     extracted_metadata = {} # Default to empty dict to prevent errors
+                if isinstance(extracted_metadata, dict) and \
+                   (extracted_metadata.get("type") == "error" or \
+                    (isinstance(extracted_metadata.get("status"), int) and extracted_metadata.get("status", 0) >= 400)):
+                    logger.warning(f"AI extraction for file {file_name} (ID: {file_id}) returned a dictionary indicating an API error: {extracted_metadata}")
+                    extracted_metadata = {} # Default to empty dict
 
                 # Validate the extracted metadata
                 
@@ -590,6 +595,11 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                 # set it to {} so downstream processing doesn't break.
                 if not isinstance(extracted_metadata, dict):
                     logger.warning(f"AI extraction for file {file_name} (ID: {file_id}) in freeform mode did not return a dictionary. Received: {extracted_metadata}")
+                    extracted_metadata = {} # Default to empty dict
+                if isinstance(extracted_metadata, dict) and \
+                   (extracted_metadata.get("type") == "error" or \
+                    (isinstance(extracted_metadata.get("status"), int) and extracted_metadata.get("status", 0) >= 400)):
+                    logger.warning(f"AI extraction for file {file_name} (ID: {file_id}) in freeform mode returned a dictionary indicating an API error: {extracted_metadata}")
                     extracted_metadata = {} # Default to empty dict
                 
                 # Build UI structure for freeform results with consistent format
