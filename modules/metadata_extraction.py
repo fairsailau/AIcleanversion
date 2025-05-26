@@ -60,7 +60,26 @@ def get_extraction_functions() -> Dict[str, Any]:
             request_body: Dict[str, Any] = {'items': items, 'ai_agent': ai_agent}
 
             if metadata_template:
-                request_body['metadata_template'] = metadata_template
+                # Construct the API-compliant metadata_template object
+                input_id = metadata_template.get("id", "")
+                input_scope = metadata_template.get("scope", "")
+                api_scope = input_scope # Default to the provided scope
+
+                if input_scope == "enterprise" and input_id.startswith("enterprise_"):
+                    parts = input_id.split('_')
+                    # Expected format: enterprise_NumericID_TemplateKey
+                    if len(parts) >= 3 and parts[0] == "enterprise" and parts[1].isdigit():
+                        api_scope = f"enterprise_{parts[1]}"
+                    else:
+                        # Log a warning if the format is not as expected but still try to use the provided scope
+                        logger.warning(f"Enterprise template ID '{input_id}' does not match expected 'enterprise_ID_key' format. Using provided scope '{input_scope}' for API call.")
+                
+                api_metadata_template_object = {
+                    "type": "metadata_template",
+                    "template_key": metadata_template.get("template_key"),
+                    "scope": api_scope
+                }
+                request_body['metadata_template'] = api_metadata_template_object
             elif fields:
                 api_fields = []
                 for field in fields:
