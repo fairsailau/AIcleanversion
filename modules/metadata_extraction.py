@@ -38,7 +38,7 @@ amples
                 'long_text': {
                     'model': ai_model,
                     'mode': 'default',
-                    'system_message': 'You are an AI assistant specialized in ex
+                    'system_message': """You are an AI assistant specialized in ex
 tracting metadata from documents based on provided field definitions. For each f
 ield, analyze the document content and extract the corresponding value. CRITICAL
 LY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1.
@@ -46,12 +46,12 @@ LY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1.
 nce level for this specific extraction, chosen from ONLY these three options: "H
 igh", "Medium", or "Low". Base your confidence on how certain you are about the
 extracted value given the document content and field definition. Example Respons
-e for a field: {"value": "INV-12345", "confidence": "High"}'
+e for a field: {"value": "INV-12345", "confidence": "High"}"""
                 },
                 'basic_text': {
                     'model': ai_model,
                     'mode': 'default',
-                    'system_message': 'You are an AI assistant specialized in ex
+                    'system_message': """You are an AI assistant specialized in ex
 tracting metadata from documents based on provided field definitions. For each f
 ield, analyze the document content and extract the corresponding value. CRITICAL
 LY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1.
@@ -59,7 +59,7 @@ LY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1.
 nce level for this specific extraction, chosen from ONLY these three options: "H
 igh", "Medium", or "Low". Base your confidence on how certain you are about the
 extracted value given the document content and field definition. Example Respons
-e for a field: {"value": "INV-12345", "confidence": "High"}'
+e for a field: {"value": "INV-12345", "confidence": "High"}"""
                 }
             }
             items = [{'id': file_id, 'type': 'file'}]
@@ -315,15 +315,15 @@ V-123", "confidence": "High" } }"
                 "type": "ai_agent_extract", # Changed from ai_agent_text_gen
                 'long_text': {
                     'model': ai_model,
-                    'system_message': 'You are an AI assistant that extracts inf
+                    'system_message': """You are an AI assistant that extracts inf
 ormation from documents and returns it as a JSON object. For each field, provide
- a value and a confidence level (High, Medium, or Low).'
+ a value and a confidence level (High, Medium, or Low)."""
                 },
                 'basic_text': {
                     'model': ai_model,
-                    'system_message': 'You are an AI assistant that extracts inf
+                    'system_message': """You are an AI assistant that extracts inf
 ormation from documents and returns it as a JSON object. For each field, provide
- a value and a confidence level (High, Medium, or Low).'
+ a value and a confidence level (High, Medium, or Low)."""
                 }
             }
             items = [{'id': file_id, 'type': 'file'}]
