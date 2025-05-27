@@ -201,6 +201,7 @@ def get_fields_for_ai_from_template(scope, template_key):
             logger.info(f"Successfully fetched and cached schema (with descriptions) for {cache_key}")
         except Exception as e:
             logger.error(f"Error fetching metadata schema {scope}/{template_key}: {e}")
+            logger.info(f"Returning None for {scope}/{template_key} due to schema fetching error.")
             return None
     
     # Process the schema to extract fields
@@ -213,11 +214,18 @@ def get_fields_for_ai_from_template(scope, template_key):
         fields_list = []
         if 'fields' in schema_details:
             fields_list = schema_details.get('fields', [])
-            logger.info(f"Found {len(fields_list)} fields in schema['fields']")
+            if not fields_list: # Specifically check if fields_list is empty after .get()
+                logger.warning(f"Schema for {scope}/{template_key} was fetched, but its 'fields' attribute is empty or resulted in an empty list. schema_details: {schema_details}")
+            logger.info(f"Found {len(fields_list)} fields in schema_details['fields'] for {scope}/{template_key}")
         elif hasattr(schema_details, 'fields'):
             # Try to access fields as an attribute
             fields_list = schema_details.fields
-            logger.info(f"Found fields as an attribute with {len(fields_list)} items")
+            if not fields_list:
+                 logger.warning(f"Schema for {scope}/{template_key} has a 'fields' attribute, but it is empty. schema_details: {schema_details}")
+            logger.info(f"Found fields as an attribute with {len(fields_list)} items for {scope}/{template_key}")
+        else:
+            logger.warning(f"Schema for {scope}/{template_key} does not contain a 'fields' key or attribute. schema_details: {schema_details}")
+            # fields_list will remain empty
         
         # Format this as a clean list for the AI model
         ai_fields = []
@@ -227,10 +235,10 @@ def get_fields_for_ai_from_template(scope, template_key):
                     try:
                         field_key = field['key'] # Direct access
                         if not field_key:
-                            logger.warning(f"Skipping field in schema because 'key' is missing or empty. Field data: {field}")
+                            logger.warning(f"Skipping field in schema for {scope}/{template_key} because 'key' is missing or empty. Field data: {field}")
                             continue
                     except KeyError:
-                        logger.warning(f"Skipping field in schema because 'key' attribute is missing. Field data: {field}")
+                        logger.warning(f"Skipping field in schema for {scope}/{template_key} because 'key' attribute is missing. Field data: {field}")
                         continue
 
                     # Proceed to build field_for_ai as before
@@ -267,29 +275,33 @@ def get_fields_for_ai_from_template(scope, template_key):
                         field_for_ai['options'] = getattr(field, 'options')
                     ai_fields.append(field_for_ai)
                 else:
-                    logger.warning(f"Skipping field in schema due to unexpected type or missing key. Field data: {field}")
+                    logger.warning(f"Skipping field in schema for {scope}/{template_key} due to unexpected type or missing key. Field data: {field}")
         else:
-            logger.warning(f"fields_list is not a list, it's a {type(fields_list)}. Cannot process for AI fields. Schema details: {schema_details}")
+            logger.warning(f"Fields list for {scope}/{template_key} is not a list (type: {type(fields_list)}). Cannot process for AI fields. Schema details: {schema_details}")
+            # ai_fields will remain empty, handled below
 
-        logger.info(f"Extracted {len(ai_fields)} AI fields from template schema. Original schema fields count: {len(fields_list) if isinstance(fields_list, list) else 'N/A'}") # Original log line
+        logger.info(f"Extracted {len(ai_fields)} AI fields from template schema {scope}/{template_key}. Original schema fields count: {len(fields_list) if isinstance(fields_list, list) else 'N/A'}")
         if ai_fields: # If any fields were successfully processed
             return ai_fields
         else:
-            # If fields_list was originally empty, or all fields from it were skipped
-            # The check 'isinstance(fields_list, list)' is important because fields_list might not be a list if schema parsing failed earlier
+            # Logic for returning empty list if no ai_fields were generated
             if not isinstance(fields_list, list) or not fields_list: 
-                 logger.warning(f"Schema's fields_list was empty or not a list (type: {type(fields_list)}). No fields to process. Schema details: {schema_details}")
-                 return [] # Return empty list if schema had no fields or fields_list was malformed
-            else: # fields_list had items, but none were convertible to ai_fields
-                 logger.warning(f"No AI fields could be extracted from the {len(fields_list)} fields in the schema. Returning empty list for AI call. Fields list from schema: {fields_list}")
-                 return [] # CRITICAL: Return empty list, not placeholder, if schema had fields but we failed to process them.
+                 logger.warning(f"Schema's fields_list for {scope}/{template_key} was empty, not a list (type: {type(fields_list)}), or schema had no 'fields' attribute. No fields to process.")
+                 logger.info(f"Returning empty list for AI call for {scope}/{template_key} because the schema's fields_list was effectively empty or malformed.")
+                 return [] 
+            else: # fields_list had items, but none were convertible to ai_fields (all were skipped)
+                 logger.warning(f"All {len(fields_list)} fields from template {scope}/{template_key} were skipped due to missing keys or format issues. Returning empty list for AI call. Fields list from schema: {fields_list}")
+                 return [] 
     elif schema_details is None: # Explicitly handle None case (error fetching schema)
-        logger.error(f"Schema for {scope}/{template_key} could not be retrieved (returned None).")
-        return None # Returning None indicates an error in fetching schema, distinct from empty fields
+        # This case is usually handled by the 'return None' in the fetching try-except block,
+        # but as a safeguard or if schema_details is set to None elsewhere:
+        logger.error(f"Schema for {scope}/{template_key} was None when starting processing step. This indicates an earlier fetching error.")
+        logger.info(f"Returning None for {scope}/{template_key} as schema_details was None.")
+        return None 
     else: # Handle empty schema or other unexpected formats (schema_details is not a dict)
-        logger.warning(f"Schema for {scope}/{template_key} is not in expected dict format: {type(schema_details)}. Raw schema_details: {schema_details}")
-        # If schema_details itself is not a dict, it implies a more fundamental issue than just empty fields.
-        return [] # Return empty list; avoid placeholder. Let AI decide what to do with no specific fields.
+        logger.warning(f"Schema for {scope}/{template_key} is not in expected dict format (type: {type(schema_details)}). Raw schema_details: {schema_details}")
+        logger.info(f"Returning empty list for AI call for {scope}/{template_key} because schema was not in expected dict format.")
+        return []
 
 def process_files_with_progress(files_to_process: List[Dict[str, Any]], extraction_functions: Dict[str, Any], batch_size: int, processing_mode: str):
     """

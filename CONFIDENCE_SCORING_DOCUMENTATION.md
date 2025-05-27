@@ -20,6 +20,8 @@ The implementation uses the **LLM Self-Reporting** approach, where we explicitly
 - **AI Agent Configuration**: Added system messages to both structured and freeform extraction methods that instruct the AI model to include confidence levels
 - **Response Processing**: Added logic to parse the AI responses and extract both values and confidence levels
 - **Data Structure**: Modified to store confidence levels alongside extracted values using `field_name_confidence` naming convention
+- **Confidence Origin Tracking**: Introduced a `confidence_origin` field for each extracted metadata value. This field tracks the source and rationale behind the assigned confidence score.
+- **Defaulting Logic**: If the AI fails to provide a confidence score for a field, or if the provided score is not one of the standard "High", "Medium", or "Low" values, the system defaults the confidence (typically to "Medium") and sets the `confidence_origin` to indicate the reason for this defaulting (e.g., `default_no_confidence`, `default_invalid_confidence`).
 
 ```python
 # Example of AI agent configuration with confidence instructions
@@ -44,6 +46,24 @@ ai_agent = {
 - **Confidence Filtering**: Added a multi-select filter to allow users to filter results by confidence level
 - **Table View Enhancement**: Added confidence columns next to each field column with appropriate color coding
 - **Detailed View Enhancement**: Added color-coded confidence indicators next to each field label
+- **Visual Cue for Defaulted Confidence**: In the UI, confidence scores that were defaulted by the script (i.e., where `confidence_origin` is not `ai_provided`) are displayed with an asterisk (e.g., "Medium*") and an explanatory tooltip is available, providing transparency into the confidence score's source.
+
+### 2.3 Understanding Confidence Origin
+
+The `confidence_origin` field, stored alongside each extracted metadata value and its confidence score, provides crucial context about how the confidence level was determined. This helps in interpreting the reliability of the AI's output.
+
+Possible `confidence_origin` values include:
+
+*   `ai_provided`: The confidence score ("High", "Medium", or "Low") was directly provided by the Box AI model as per the instructions.
+*   `default_no_confidence`: The AI extracted a value for the field but did not provide any confidence score. The system defaulted the confidence (e.g., to "Medium").
+*   `default_invalid_confidence`: The AI provided a confidence score, but it was not one of the expected "High", "Medium", or "Low" values. The system defaulted the confidence (e.g., to "Medium").
+*   `default_null_value`: The AI returned a null or empty value for the field, suggesting very low certainty. The system assigned a default confidence (e.g., "Low" or "Medium") and may store the value as null/empty.
+*   `default_parsing_fallback`: The AI's response for a field was not in the expected nested `{"value": ..., "confidence": ...}` structure, but the system was able to extract a value. Confidence was defaulted.
+*   `default_error_processing`: An error occurred within the script while processing a specific field's data from the AI. Confidence was defaulted, typically to "Low".
+*   `error_default`: An error occurred during the overall processing of the file in `modules/processing.py`, leading to a default confidence assignment for any fields that might have been partially processed or are being presented in an error state.
+*   `unknown_origin`: A fallback value if the origin could not be determined, indicating a potential gap in origin tracking for a specific scenario.
+
+When reviewing extracted metadata, especially if a confidence score is displayed with an asterisk (e.g., "Medium*") in the UI, checking the `confidence_origin` (if exposed in detailed views or logs) can provide insight into why the score might not directly reflect the AI's explicit rating.
 
 ### 3. User Experience Improvements
 
