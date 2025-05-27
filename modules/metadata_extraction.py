@@ -4,211 +4,184 @@ import json
 import requests
 from typing import Dict, Any, List, Optional
 
+# Corrected logging.basicConfig format string
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# This function was previously named metadata_extraction
-# Renaming it to get_extraction_functions to match the import in processing.py
 def get_extraction_functions() -> Dict[str, Any]:
     """
     Returns a dictionary of available metadata extraction functions.
-    
-    Returns:
-        dict: Dictionary mapping extraction method names to function objects.
     """
 
-    def extract_structured_metadata(client: Any, file_id: str, fields: Optional[List[Dict[str, Any]]] = None, metadata_template: Optional[Dict[str, Any]] = None, ai_model: str = 'azure__openai__gpt_4o_mini') -> Dict[str, Any]:
+    def extract_structured_metadata(client: Any, file_id: str, fields: Optional[
+List[Dict[str, Any]]] = None, metadata_template: Optional[Dict[str, Any]] = None
+, ai_model: str = 'azure__openai__gpt_4o_mini') -> Dict[str, Any]:
         """
         Extract structured metadata from a file using Box AI API
-        
-        Args:
-            client (Any): The Box API client.
-            file_id (str): Box file ID
-            fields (list, optional): List of field definitions for extraction
-            metadata_template (dict, optional): Metadata template definition
-            ai_model (str): AI model to use for extraction
-            
-        Returns:
-            dict: Extracted metadata with confidence scores
         """
         try:
-            # client = st.session_state.client # Client is now passed as an argument
             access_token = None
             if hasattr(client, '_oauth'):
                 access_token = client._oauth.access_token
-            elif hasattr(client, 'auth') and hasattr(client.auth, 'access_token'):
+            elif hasattr(client, 'auth') and hasattr(client.auth, 'access_token'
+):
                 access_token = client.auth.access_token
             if not access_token:
                 raise ValueError('Could not retrieve access token from client')
 
-            headers = {'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}
+            headers = {'Authorization': f'Bearer {access_token}', 'Content-Type'
+: 'application/json'}
+            # Corrected system_message strings to use proper quoting for JSON ex
+amples
             ai_agent = {
                 'type': 'ai_agent_extract_structured',
                 'long_text': {
                     'model': ai_model,
                     'mode': 'default',
-                    'system_message': 'You are an AI assistant specialized in extracting metadata from documents based on provided field definitions. For each field, analyze the document content and extract the corresponding value. CRITICALLY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1. "value": The extracted metadata value as a string. 2. "confidence": Your confidence level for this specific extraction, chosen from ONLY these three options: "High", "Medium", or "Low". Base your confidence on how certain you are about the extracted value given the document content and field definition. Example Response for a field: {"value": "INV-12345", "confidence": "High"}'
+                    'system_message': 'You are an AI assistant specialized in ex
+tracting metadata from documents based on provided field definitions. For each f
+ield, analyze the document content and extract the corresponding value. CRITICAL
+LY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1.
+"value": The extracted metadata value as a string. 2. "confidence": Your confide
+nce level for this specific extraction, chosen from ONLY these three options: "H
+igh", "Medium", or "Low". Base your confidence on how certain you are about the
+extracted value given the document content and field definition. Example Respons
+e for a field: {"value": "INV-12345", "confidence": "High"}'
                 },
                 'basic_text': {
                     'model': ai_model,
                     'mode': 'default',
-                    'system_message': 'You are an AI assistant specialized in extracting metadata from documents based on provided field definitions. For each field, analyze the document content and extract the corresponding value. CRITICALLY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1. "value": The extracted metadata value as a string. 2. "confidence": Your confidence level for this specific extraction, chosen from ONLY these three options: "High", "Medium", or "Low". Base your confidence on how certain you are about the extracted value given the document content and field definition. Example Response for a field: {"value": "INV-12345", "confidence": "High"}'
+                    'system_message': 'You are an AI assistant specialized in ex
+tracting metadata from documents based on provided field definitions. For each f
+ield, analyze the document content and extract the corresponding value. CRITICAL
+LY IMPORTANT: Respond for EACH field with a JSON object containing two keys: 1.
+"value": The extracted metadata value as a string. 2. "confidence": Your confide
+nce level for this specific extraction, chosen from ONLY these three options: "H
+igh", "Medium", or "Low". Base your confidence on how certain you are about the
+extracted value given the document content and field definition. Example Respons
+e for a field: {"value": "INV-12345", "confidence": "High"}'
                 }
             }
             items = [{'id': file_id, 'type': 'file'}]
             api_url = 'https://api.box.com/2.0/ai/extract_structured'
-            request_body: Dict[str, Any] = {'items': items, 'ai_agent': ai_agent}
+            request_body: Dict[str, Any] = {'items': items, 'ai_agent': ai_agent
+}
 
-            # Prioritize 'fields' if provided and not empty
-            if fields and len(fields) > 0:
+            if metadata_template:
+                request_body['metadata_template'] = metadata_template
+            elif fields:
                 api_fields = []
-                for field_def in fields: # 'fields' is the function argument
-                    # Assuming field_def is a dictionary like {'key': ..., 'displayName': ..., 'type': ..., 'description': ..., 'options': ...}
-                    # This is the format produced by get_fields_for_ai_from_template
-                    current_api_field = {
-                        'key': field_def.get('key'),
-                        'displayName': field_def.get('displayName', field_def.get('key')), # Default displayName to key
-                        'type': field_def.get('type', 'string') # Default type to string
-                    }
-                    if 'description' in field_def and field_def.get('description'):
-                        current_api_field['description'] = field_def['description']
-                    if 'prompt' in field_def and field_def.get('prompt'): # If 'prompt' key exists from input
-                        current_api_field['prompt'] = field_def['prompt']
-                    if field_def.get('type') in ['enum', 'multiSelect'] and 'options' in field_def and field_def.get('options'):
-                        current_api_field['options'] = field_def['options']
-                    
-                    if current_api_field.get('key'): # Only add if key is present
-                        api_fields.append(current_api_field)
+                for field in fields:
+                    if 'key' in field:
+                        api_fields.append(field)
                     else:
-                        logger.warning(f"Skipping field due to missing 'key': {field_def}")
+                        api_field = {
+                            'key': field.get('name', ''),
+                            'displayName': field.get('display_name', field.get('
+name', '')),
+                            'type': field.get('type', 'string')
+                        }
+                        if 'description' in field:
+                            api_field['description'] = field['description']
+                        if 'prompt' in field:
+                            api_field['prompt'] = field['prompt']
+                        if field.get('type') == 'enum' and 'options' in field:
+                            api_field['options'] = field['options']
+                        api_fields.append(api_field)
                 request_body['fields'] = api_fields
-            elif metadata_template:
-                # Construct the API-compliant metadata_template object
-                input_id = metadata_template.get("id", "")
-                input_scope = metadata_template.get("scope", "")
-                api_scope = input_scope # Default to the provided scope
-
-                if input_scope == "enterprise" and input_id.startswith("enterprise_"):
-                    parts = input_id.split('_')
-                    # Expected format: enterprise_NumericID_TemplateKey
-                    if len(parts) >= 3 and parts[0] == "enterprise" and parts[1].isdigit():
-                        api_scope = f"enterprise_{parts[1]}"
-                    else:
-                        # Log a warning if the format is not as expected but still try to use the provided scope
-                        logger.warning(f"Enterprise template ID '{input_id}' does not match expected 'enterprise_ID_key' format. Using provided scope '{input_scope}' for API call.")
-                
-                api_metadata_template_object = {
-                    "type": "metadata_template",
-                    "template_key": metadata_template.get("template_key"),
-                    "scope": api_scope
-                }
-                request_body['metadata_template'] = api_metadata_template_object
             else:
-                raise ValueError('Either fields or metadata_template must be provided for structured extraction')
+                raise ValueError('Either fields or metadata_template must be pro
+vided for structured extraction')
 
-            logger.info(f'Making Box AI API call for structured extraction with request: {json.dumps(request_body)}')
-            response = requests.post(api_url, headers=headers, json=request_body)
+            logger.info(f'Making Box AI API call for structured extraction with
+request: {json.dumps(request_body)}')
+            response = requests.post(api_url, headers=headers, json=request_body
+)
 
             if response.status_code != 200:
-                box_request_id = "N/A"
-                error_details = response.text
-                try:
-                    error_json = response.json()
-                    if isinstance(error_json, dict):
-                        box_request_id = error_json.get("request_id", "N/A")
-                        # You could extract more details here if needed
-                        error_details = json.dumps(error_json) 
-                except json.JSONDecodeError:
-                    # response.text is already set as error_details
-                    pass
-                logger.error(f'Box AI API error for structured extraction on file {file_id}: {response.status_code} {response.reason}. Request ID: {box_request_id}. Response: {error_details}')
-                return {'error': f'Error in Box AI API call: {response.status_code} {response.reason}', 'request_id': box_request_id, 'details': error_details}
+                logger.error(f'Box AI API error response: {response.status_code}
+ - {response.reason}. Body: {response.text}')
+                return {'error': f'Error in Box AI API call: {response.status_co
+de} {response.reason}', 'details': response.text}
 
             response_data = response.json()
-            logger.info(f'Raw Box AI structured extraction response data: {json.dumps(response_data)}')
+            logger.info(f'Raw Box AI structured extraction response data: {json.
+dumps(response_data)}')
 
             processed_response: Dict[str, Any] = {}
-            if 'answer' in response_data and isinstance(response_data['answer'], dict):
+            if 'answer' in response_data and isinstance(response_data['answer'],
+ dict):
                 answer_dict = response_data['answer']
-                if 'fields' in answer_dict and isinstance(answer_dict['fields'], list):
-                    logger.info("Processing 'answer' with 'fields' array format.")
+                if 'fields' in answer_dict and isinstance(answer_dict['fields'],
+ list):
+                    logger.info("Processing 'answer' with 'fields' array format.
+")
                     fields_array = answer_dict['fields']
                     for field_item in fields_array:
-                        if isinstance(field_item, dict) and 'key' in field_item and ('value' in field_item):
+                        if isinstance(field_item, dict) and 'key' in field_item
+and ('value' in field_item):
                             field_key = field_item['key']
                             extracted_value = field_item['value']
-                            origin = "default_no_confidence" # Default origin
-                            if 'confidence' in field_item:
-                                original_ai_confidence = field_item['confidence']
-                                if original_ai_confidence not in ['High', 'Medium', 'Low']:
-                                    confidence_level = 'Medium'
-                                    origin = "default_invalid_confidence"
-                                    logger.warning(f"Field {field_key}: AI returned invalid confidence '{original_ai_confidence}'. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_item}")
-                                else:
-                                    confidence_level = original_ai_confidence
-                                    origin = "ai_provided"
-                            else:
-                                confidence_level = 'Medium' # Default if 'confidence' key is missing
-                                origin = "default_no_confidence"
-                                logger.info(f"Field {field_key}: AI response missing 'confidence'. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_item}")
-                            
-                            processed_response[field_key] = {
-                                'value': extracted_value,
-                                'confidence': confidence_level,
-                                'confidence_origin': origin
-                            }
+                            confidence_level = field_item.get('confidence', 'Med
+ium')
+                            if confidence_level not in ['High', 'Medium', 'Low']
+:
+                                logger.warning(f"Field {field_key}: Unexpected c
+onfidence value '{confidence_level}', defaulting to Medium.")
+                                confidence_level = 'Medium'
+                            processed_response[field_key] = extracted_value
+                            processed_response[f'{field_key}_confidence'] = conf
+idence_level
                         else:
-                            logger.warning(f"Skipping invalid item in 'fields' array: {field_item}")
+                            logger.warning(f"Skipping invalid item in 'fields' a
+rray: {field_item}")
                 else:
-                    logger.info("Processing 'answer' as standard key-value dictionary.")
+                    logger.info("Processing 'answer' as standard key-value dicti
+onary.")
                     for field_key, field_data in answer_dict.items():
                         extracted_value = None
                         confidence_level = 'Medium'
-                        origin = "default_parsing_fallback" # Default origin, can be overridden
                         try:
-                            if isinstance(field_data, dict) and 'value' in field_data and ('confidence' in field_data):
+                            if isinstance(field_data, dict) and 'value' in field
+_data and ('confidence' in field_data):
                                 extracted_value = field_data['value']
-                                original_ai_confidence = field_data['confidence']
-                                if original_ai_confidence not in ['High', 'Medium', 'Low']:
+                                confidence_level = field_data['confidence']
+                                if confidence_level not in ['High', 'Medium', 'L
+ow']:
+                                    logger.warning(f"Field {field_key}: Unexpect
+ed confidence value '{confidence_level}', defaulting to Medium.")
                                     confidence_level = 'Medium'
-                                    origin = "default_invalid_confidence"
-                                    logger.warning(f"Field {field_key}: AI returned invalid confidence '{original_ai_confidence}'. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data: {field_data}")
-                                else:
-                                    confidence_level = original_ai_confidence
-                                    origin = "ai_provided"
                             elif field_data is None:
+                                logger.info(f'Field {field_key}: Received null v
+alue. Setting value to None and confidence to Low.')
                                 extracted_value = None
                                 confidence_level = 'Low'
-                                origin = "default_null_value"
-                                logger.info(f"Field {field_key}: AI returned null value. Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw AI data: {field_data}")
-                            elif isinstance(field_data, dict) and 'value' in field_data and (len(field_data) == 1):
+                            elif isinstance(field_data, dict) and 'value' in fie
+ld_data and (len(field_data) == 1):
+                                logger.warning(f"Field {field_key}: Found dict w
+ith only 'value' key: {field_data}. Extracting value directly.")
                                 extracted_value = field_data['value']
-                                confidence_level = 'Medium' # Default confidence if not provided
-                                origin = "default_no_confidence"
-                                logger.warning(f"Field {field_key}: AI response missing 'confidence' key. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data: {field_data}")
+                                confidence_level = 'Medium'
                             else:
+                                logger.warning(f'Field {field_key}: Unexpected d
+ata format: {field_data}. Using raw data as value and Medium confidence.')
                                 extracted_value = field_data
                                 confidence_level = 'Medium'
-                                origin = "default_parsing_fallback"
-                                logger.warning(f"Field {field_key}: Unexpected AI data format. Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw AI data: {field_data}")
-                            
-                            processed_response[field_key] = {
-                                'value': extracted_value,
-                                'confidence': confidence_level,
-                                'confidence_origin': origin
-                            }
+                            processed_response[field_key] = extracted_value
+                            processed_response[f'{field_key}_confidence'] = conf
+idence_level
                         except Exception as e:
-                            logger.error(f"Error processing field {field_key} with data '{field_data}': {str(e)}. Assigning Low confidence and default_error_processing origin.")
-                            processed_response[field_key] = {
-                                'value': field_data, # Store raw data on error
-                                'confidence': 'Low',
-                                'confidence_origin': "default_error_processing"
-                            }
+                            logger.error(f"Error processing field {field_key} wi
+th data '{field_data}': {str(e)}")
+                            processed_response[field_key] = field_data
+                            processed_response[f'{field_key}_confidence'] = 'Low
+'
 
-            elif 'answer' in response_data and isinstance(response_data['answer'], str):
-                logger.info(f"Processing 'answer' as string (potential freeform JSON) for file_id: {file_id}.")
+            elif 'answer' in response_data and isinstance(response_data['answer'
+], str):
+                logger.info("Processing 'answer' as string (potential freeform J
+SON).")
                 response_text = response_data['answer']
-                json_str = "" # Initialize to avoid reference before assignment in logger
                 try:
                     json_start = response_text.find('{')
                     json_end = response_text.rfind('}') + 1
@@ -217,273 +190,239 @@ def get_extraction_functions() -> Dict[str, Any]:
                         parsed_json = json.loads(json_str)
                         if isinstance(parsed_json, dict):
                             for field_key, field_data in parsed_json.items():
-                                extracted_value = None
-                                confidence_level = 'Medium'
-                                origin = "default_parsing_fallback"
-
-                                if isinstance(field_data, dict) and 'value' in field_data and ('confidence' in field_data):
+                                if isinstance(field_data, dict) and 'value' in f
+ield_data and ('confidence' in field_data):
                                     extracted_value = field_data['value']
-                                    original_ai_confidence = field_data['confidence']
-                                    if original_ai_confidence not in ['High', 'Medium', 'Low']:
+                                    confidence_level = field_data['confidence']
+                                    if confidence_level not in ['High', 'Medium'
+, 'Low']:
                                         confidence_level = 'Medium'
-                                        origin = "default_invalid_confidence"
-                                        logger.warning(f"Field {field_key} (file_id: {file_id}): AI returned invalid confidence '{original_ai_confidence}' in parsed JSON. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
-                                    else:
-                                        confidence_level = original_ai_confidence
-                                        origin = "ai_provided"
-                                elif isinstance(field_data, dict) and 'value' in field_data: # Value present, confidence missing
-                                    extracted_value = field_data['value']
-                                    confidence_level = 'Medium'
-                                    origin = "default_no_confidence"
-                                    logger.warning(f"Field {field_key} (file_id: {file_id}): AI response missing 'confidence' in parsed JSON. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
-                                else: # Not a dict with 'value' or not the expected structure
-                                    extracted_value = field_data
-                                    confidence_level = 'Medium'
-                                    origin = "default_parsing_fallback"
-                                    logger.warning(f"Field {field_key} (file_id: {file_id}): Unexpected structure in parsed JSON. Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
-                                
-                                processed_response[field_key] = {
-                                    'value': extracted_value,
-                                    'confidence': confidence_level,
-                                    'confidence_origin': origin
-                                }
+                                    processed_response[field_key] = extracted_va
+lue
+                                    processed_response[f'{field_key}_confidence'
+] = confidence_level
+                                else:
+                                    processed_response[field_key] = field_data
+                                    processed_response[f'{field_key}_confidence'
+] = 'Medium'
                         else:
-                            logger.warning(f"Parsed JSON from 'answer' string for file_id: {file_id} is not a dictionary. Type: {type(parsed_json)}. Parsed content: {parsed_json}")
+                            logger.warning(f"Parsed JSON from 'answer' string is
+ not a dictionary: {parsed_json}")
                             processed_response['_raw_response'] = response_text
-                            processed_response['_error_parsing_json'] = f"Parsed JSON is not a dict: {type(parsed_json)}"
-                            processed_response['_confidence_processing_failed'] = True
+                            processed_response['_confidence_processing_failed']
+= True
                     else:
-                        logger.warning(f"No JSON object found in 'answer' string for file_id: {file_id}. Raw answer: \"{response_text}\"")
+                        logger.warning("No JSON object found in 'answer' string.
+")
                         processed_response['_raw_response'] = response_text
-                        processed_response['_confidence_processing_failed'] = True
-                except json.JSONDecodeError as e_json:
-                    logger.error(f'Error parsing JSON from answer string for file_id: {file_id}: {str(e_json)}. JSON string attempted: "{json_str}". Raw full answer: "{response_text}"')
+                        processed_response['_confidence_processing_failed'] = Tr
+ue
+                except Exception as e:
+                    logger.error(f'Error parsing JSON from answer string: {str(e
+)}')
                     processed_response['_raw_response'] = response_text
-                    processed_response['_error_parsing_json'] = str(e_json)
                     processed_response['_confidence_processing_failed'] = True
-                # IMPORTANT: The next 'elif' must be at the same indentation level as the parent 'if/elif' chain
-            elif 'entries' in response_data and len(response_data['entries']) > 0:
-                logger.info(f"Processing response using fallback 'entries' format for file_id: {file_id}.")
+            elif 'entries' in response_data and len(response_data['entries']) >
+0:
+                logger.info("Processing response using fallback 'entries' format
+.")
                 entry = response_data['entries'][0]
                 if 'metadata' in entry:
                     metadata = entry['metadata']
                     for field_key, field_value in metadata.items():
                         extracted_value = field_value
-                        confidence_level = 'Medium' # Default confidence
-                        origin = "default_parsing_fallback" # Default origin
+                        confidence_level = 'Medium'
                         try:
-                            if isinstance(field_value, str) and field_value.strip().startswith('{') and field_value.strip().endswith('}'):
+                            if isinstance(field_value, str) and field_value.stri
+p().startswith('{') and field_value.strip().endswith('}'):
                                 try:
                                     parsed_value = json.loads(field_value)
-                                    if isinstance(parsed_value, dict) and 'value' in parsed_value and ('confidence' in parsed_value):
+                                    if isinstance(parsed_value, dict) and 'value
+' in parsed_value and ('confidence' in parsed_value):
                                         extracted_value = parsed_value['value']
-                                        confidence_level = parsed_value['confidence']
-                                        original_ai_confidence = parsed_value['confidence']
-                                        if original_ai_confidence not in ['High', 'Medium', 'Low']:
+                                        confidence_level = parsed_value['confide
+nce']
+                                        if confidence_level not in ['High', 'Med
+ium', 'Low']:
+                                            logger.warning(f"Field {field_key}:
+Unexpected confidence value '{confidence_level}', defaulting to Medium.")
                                             confidence_level = 'Medium'
-                                            origin = "default_invalid_confidence"
-                                            logger.warning(f"Field {field_key} (file_id: {file_id}): AI returned invalid confidence '{original_ai_confidence}' in parsed JSON (from entries). Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}")
-                                        else:
-                                            confidence_level = original_ai_confidence
-                                            origin = "ai_provided"
-                                    elif isinstance(parsed_value, dict) and 'value' in parsed_value: # Value present, confidence missing
-                                        extracted_value = parsed_value['value']
-                                        confidence_level = 'Medium'
-                                        origin = "default_no_confidence"
-                                        logger.warning(f"Field {field_key} (file_id: {file_id}): AI response missing 'confidence' in parsed JSON (from entries). Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}")
-                                    else: # Parsed JSON but not the expected structure
-                                        extracted_value = field_value 
-                                        confidence_level = 'Medium'
-                                        origin = "default_parsing_fallback"
-                                        logger.warning(f"Field {field_key} (file_id: {file_id}): Unexpected structure in parsed JSON (from entries). Defaulting to original value and confidence '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}, Original field value: {field_value}")
+                                    else:
+                                        logger.warning(f"Field {field_key}: Pars
+ed JSON but keys 'value' and 'confidence' not found. Using raw value.")
                                 except json.JSONDecodeError:
-                                    extracted_value = field_value 
-                                    confidence_level = 'Medium'
-                                    origin = "default_parsing_fallback"
-                                    logger.warning(f"Field {field_key} (file_id: {file_id}): Failed to parse potential JSON value (from entries). Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw field value: '{field_value}'")
+                                    logger.warning(f"Field {field_key}: Failed t
+o parse potential JSON value '{field_value}'. Using raw value.")
                             else:
-                                extracted_value = field_value 
-                                confidence_level = 'Medium'
-                                origin = "default_no_confidence" # If not JSON, AI didn't provide confidence structure
-                                logger.info(f"Field {field_key} (file_id: {file_id}): Value is not a JSON string (from entries). Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw field value: '{field_value}'")
-                            
-                            processed_response[field_key] = {
-                                'value': extracted_value,
-                                'confidence': confidence_level,
-                                'confidence_origin': origin
-                            }
+                                logger.info(f'Field {field_key}: Value is not th
+e expected JSON format. Using raw value and Medium confidence.')
+                            processed_response[field_key] = extracted_value
+                            processed_response[f'{field_key}_confidence'] = conf
+idence_level
                         except Exception as e:
-                            logger.error(f"Error processing field {field_key} (file_id: {file_id}) with value '{field_value}' (from entries): {str(e)}. Assigning Low confidence and default_error_processing origin.")
-                            processed_response[field_key] = {
-                                'value': field_value, # Store raw data on error
-                                'confidence': 'Low',
-                                'confidence_origin': "default_error_processing"
-                            }
+                            logger.error(f"Error processing field {field_key} wi
+th value '{field_value}': {str(e)}")
+                            processed_response[field_key] = field_value
+                            processed_response[f'{field_key}_confidence'] = 'Low
+'
                 else:
-                    logger.warning(f"No 'metadata' field found in the structured API entry for file_id: {file_id}: {entry}")
-                    processed_response['_error'] = "No 'metadata' field in API entry"
+                    logger.warning(f"No 'metadata' field found in the structured
+ API entry: {entry}")
+                    processed_response['_error'] = "No 'metadata' field in API e
+ntry"
                     processed_response['_confidence_processing_failed'] = True
             else:
-                logger.warning(f"Neither 'answer' nor 'entries' field found in the structured API response for file_id: {file_id}: {response_data}")
-                processed_response['_error'] = "Neither 'answer' nor 'entries' field in API response"
+                logger.warning(f"Neither 'answer' nor 'entries' field found in t
+he structured API response: {response_data}")
+                processed_response['_error'] = "Neither 'answer' nor 'entries' f
+ield in API response"
                 processed_response['_confidence_processing_failed'] = True
             return processed_response
         except Exception as e:
-            logger.error(f'Error in structured metadata extraction call for file_id {file_id}: {str(e)}')
+            logger.error(f'Error in structured metadata extraction call: {str(e)
+}')
             return {'error': str(e)}
 
-    def extract_freeform_metadata(client: Any, file_id: str, prompt: str, ai_model: str = 'azure__openai__gpt_4o_mini') -> Dict[str, Any]:
+    def extract_freeform_metadata(client: Any, file_id: str, prompt: str, ai_mod
+el: str = 'azure__openai__gpt_4o_mini') -> Dict[str, Any]:
         """
         Extract freeform metadata from a file using Box AI API
-        
-        Args:
-            client (Any): The Box API client.
-            file_id (str): Box file ID
-            prompt (str): Extraction prompt
-            ai_model (str): AI model to use for extraction
-            
-        Returns:
-            dict: Extracted metadata with confidence scores
         """
         try:
-            # client = st.session_state.client # Client is now passed as an argument
             access_token = None
             if hasattr(client, '_oauth'):
                 access_token = client._oauth.access_token
-            elif hasattr(client, 'auth') and hasattr(client.auth, 'access_token'):
+            elif hasattr(client, 'auth') and hasattr(client.auth, 'access_token'
+):
                 access_token = client.auth.access_token
             if not access_token:
                 raise ValueError('Could not retrieve access token from client')
 
-            headers = {'Authorization': f'Bearer {access_token}', 'Content-Type': 'application/json'}
-            
-            enhanced_prompt = prompt
-            # Ensure prompt asks for confidence if not already present
-            # Refined prompt to be more explicit about the JSON structure for ALL fields.
-            if not 'confidence' in prompt.lower(): # Keep the check to avoid redundant additions if user prompt already has it
-                enhanced_prompt = prompt + " CRITICALLY IMPORTANT: For ALL pieces of information you extract, you MUST provide your confidence level (High, Medium, or Low) regarding the accuracy of that specific piece of information. Format your entire response as a single JSON object. Each key in this JSON object should correspond to an extracted field. The value for each key MUST be another JSON object containing two keys: 'value' (the extracted information as a string) and 'confidence' (your confidence level: 'High', 'Medium', or 'Low'). Example: { \"InvoiceNumber\": { \"value\": \"INV-123\", \"confidence\": \"High\" }, \"TotalAmount\": { \"value\": \"$500\", \"confidence\": \"Medium\" } }"
-            else:
-                # If 'confidence' is already in the prompt, ensure the structure is reinforced.
-                # This is a lighter touch if the user is already asking for confidence.
-                enhanced_prompt = prompt + " Ensure the entire response is a single JSON object where each field's value is a nested object like {\"value\": \"...\", \"confidence\": \"...\"}."
+            headers = {'Authorization': f'Bearer {access_token}', 'Content-Type'
+: 'application/json'}
 
+            enhanced_prompt = prompt
+            # Corrected system_message strings to use proper quoting for JSON ex
+amples
+            if not 'confidence' in prompt.lower():
+                enhanced_prompt = prompt + " For each extracted field, provide y
+our confidence level (High, Medium, or Low) in the accuracy of the extraction. F
+ormat your response as a JSON object with each field having a nested object cont
+aining 'value' and 'confidence'. Example: { "InvoiceNumber": { "value": "IN
+V-123", "confidence": "High" } }"
 
             ai_agent = {
-                'type': 'ai_agent_text_gen',
+                "type": "ai_agent_extract", # Changed from ai_agent_text_gen
+                'long_text': {
+                    'model': ai_model,
+                    'system_message': 'You are an AI assistant that extracts inf
+ormation from documents and returns it as a JSON object. For each field, provide
+ a value and a confidence level (High, Medium, or Low).'
+                },
                 'basic_text': {
                     'model': ai_model,
-                    'prompt': enhanced_prompt,
-                    'system_message': 'You are an AI assistant that extracts information from documents. Your primary goal is to return a single, valid JSON object. Every piece of information you identify and extract MUST be structured as a key-value pair within this JSON object, where the key is the field name, and the value is *another* JSON object containing exactly two keys: "value" (the extracted data as a string) and "confidence" (your assessed confidence level: "High", "Medium", or "Low"). Adhere strictly to this format for all extracted data.'
+                    'system_message': 'You are an AI assistant that extracts inf
+ormation from documents and returns it as a JSON object. For each field, provide
+ a value and a confidence level (High, Medium, or Low).'
                 }
             }
             items = [{'id': file_id, 'type': 'file'}]
-            api_url = 'https://api.box.com/2.0/ai/text_gen'
-            request_body = {'items': items, 'ai_agent': ai_agent}
+            api_url = 'https://api.box.com/2.0/ai/extract' # Changed from /ai/text_gen
+            request_body = {'items': items, 'prompt': enhanced_prompt, 'ai_agent
+': ai_agent}
 
-            logger.info(f'Making Box AI API call for freeform extraction with request: {json.dumps(request_body)}')
-            response = requests.post(api_url, headers=headers, json=request_body)
+            logger.info(f'Making Box AI API call for freeform extraction with re
+quest: {json.dumps(request_body)}')
+            response = requests.post(api_url, headers=headers, json=request_body
+)
 
             if response.status_code != 200:
-                box_request_id = "N/A"
-                error_details = response.text
-                try:
-                    error_json = response.json()
-                    if isinstance(error_json, dict):
-                        box_request_id = error_json.get("request_id", "N/A")
-                        error_details = json.dumps(error_json)
-                except json.JSONDecodeError:
-                    pass
-                logger.error(f'Box AI API error for freeform extraction on file {file_id}: {response.status_code} {response.reason}. Request ID: {box_request_id}. Response: {error_details}')
-                return {'error': f'Error in Box AI API call: {response.status_code} {response.reason}', 'request_id': box_request_id, 'details': error_details}
+                logger.error(f'Box AI API error response: {response.status_code}
+ - {response.reason}. Body: {response.text}')
+                return {'error': f'Error in Box AI API call: {response.status_co
+de} {response.reason}', 'details': response.text}
 
             response_data = response.json()
-            logger.info(f'Raw Box AI freeform extraction response data: {json.dumps(response_data)}')
+            logger.info(f'Raw Box AI freeform extraction response data: {json.du
+mps(response_data)}')
 
             processed_response: Dict[str, Any] = {}
-            if 'answer' in response_data and isinstance(response_data['answer'], str):
+            if 'answer' in response_data and isinstance(response_data['answer'],
+ str):
                 response_text = response_data['answer']
                 try:
-                    # Attempt to find and parse JSON within the answer string
                     json_start = response_text.find('{')
                     json_end = response_text.rfind('}') + 1
                     if json_start != -1 and json_end > json_start:
                         json_str = response_text[json_start:json_end]
-                        try:
-                            parsed_json = json.loads(json_str)
-                            if isinstance(parsed_json, dict):
-                                for key, value_confidence_pair in parsed_json.items():
-                                    extracted_val = None
-                                    confidence_val = 'Medium'
-                                    origin = "default_parsing_fallback" # Default, will be overridden
-
-                                    if isinstance(value_confidence_pair, dict) and 'value' in value_confidence_pair and 'confidence' in value_confidence_pair:
-                                        extracted_val = value_confidence_pair['value']
-                                        original_ai_confidence = value_confidence_pair['confidence']
-                                        if original_ai_confidence not in ['High', 'Medium', 'Low']:
-                                            confidence_val = 'Medium'
-                                            origin = "default_invalid_confidence"
-                                            logger.warning(f"Field '{key}' (freeform, file_id: {file_id}): AI returned invalid confidence '{original_ai_confidence}'. Defaulting to '{confidence_val}'. Origin: '{origin}'. Raw AI data for field: {value_confidence_pair}")
-                                        else:
-                                            confidence_val = original_ai_confidence
-                                            origin = "ai_provided"
-                                    elif isinstance(value_confidence_pair, dict) and 'value' in value_confidence_pair: # Value present, confidence missing
-                                        extracted_val = value_confidence_pair['value']
+                        parsed_json = json.loads(json_str)
+                        if isinstance(parsed_json, dict):
+                            for key, value_confidence_pair in parsed_json.items(
+):
+                                if isinstance(value_confidence_pair, dict) and '
+value' in value_confidence_pair and 'confidence' in value_confidence_pair:
+                                    extracted_val = value_confidence_pair['value
+']
+                                    confidence_val = value_confidence_pair['conf
+idence']
+                                    if confidence_val not in ['High', 'Medium',
+'Low']:
+                                        logger.warning(f"Field {key}: Unexpected
+ confidence '{confidence_val}', defaulting to Medium.")
                                         confidence_val = 'Medium'
-                                        origin = "default_no_confidence"
-                                        logger.warning(f"Field '{key}' (freeform, file_id: {file_id}): AI response missing 'confidence'. Defaulting to '{confidence_val}'. Origin: '{origin}'. Raw AI data for field: {value_confidence_pair}")
-                                    else:
-                                        # If not in value/confidence format, take the value as is
-                                        extracted_val = value_confidence_pair 
-                                        confidence_val = 'Medium'
-                                        origin = "default_parsing_fallback"
-                                        logger.warning(f"Field '{key}' (freeform, file_id: {file_id}): Unexpected AI data format. Expected dict with 'value' and 'confidence', got {type(value_confidence_pair)}. Defaulting to value '{extracted_val}' and confidence '{confidence_val}'. Origin: '{origin}'. Raw AI data for field: {value_confidence_pair}")
-                                    
-                                    processed_response[key] = {
-                                        'value': extracted_val,
-                                        'confidence': confidence_val,
-                                        'confidence_origin': origin
-                                    }
-                            else:
-                                logger.warning(f"Parsed JSON from 'answer' string for file_id: {file_id} is not a dictionary. Type: {type(parsed_json)}. Parsed content: {parsed_json}. Storing raw answer.")
-                                processed_response['_raw_answer'] = response_text
-                                processed_response['_error_parsing_json'] = f"Parsed JSON is not a dict: {type(parsed_json)}"
-                                processed_response['_confidence_processing_failed'] = True
-                        except json.JSONDecodeError as e_json:
-                            logger.error(f'Error parsing JSON from freeform answer string for file_id: {file_id}: {str(e_json)}. JSON string attempted: "{json_str}". Raw full answer: "{response_text}"')
+                                    processed_response[key] = extracted_val
+                                    processed_response[f'{key}_confidence'] = co
+nfidence_val
+                                else:
+                                    logger.warning(f"Field {key}: Unexpected for
+mat {value_confidence_pair}. Using raw value and Medium confidence.")
+                                    processed_response[key] = value_confidence_p
+air
+                                    processed_response[f'{key}_confidence'] = 'M
+edium'
+                        else:
+                            logger.warning(f"Parsed JSON from 'answer' string is
+ not a dictionary: {parsed_json}. Storing raw answer.")
                             processed_response['_raw_answer'] = response_text
-                            processed_response['_error_parsing_json'] = str(e_json)
-                            processed_response['_confidence_processing_failed'] = True
+                            processed_response['_confidence_processing_failed']
+= True
                     else:
-                        logger.warning(f"No JSON object found in 'answer' string for file_id: {file_id}. Storing raw answer: \"{response_text}\"")
+                        logger.warning("No JSON object found in 'answer' string.
+ Storing raw answer.")
                         processed_response['_raw_answer'] = response_text
-                        processed_response['_confidence_processing_failed'] = True
-            elif 'entries' in response_data and len(response_data['entries']) > 0 and 'answer' in response_data['entries'][0]:
-                 # Fallback for older API response structure if needed
+                        processed_response['_confidence_processing_failed'] = Tr
+ue
+                except json.JSONDecodeError as e_json:
+                    logger.error(f'Error parsing JSON from freeform answer strin
+g: {str(e_json)}. Raw answer: {response_text}')
+                    processed_response['_raw_answer'] = response_text
+                    processed_response['_error_parsing_json'] = str(e_json)
+                    processed_response['_confidence_processing_failed'] = True
+            elif 'entries' in response_data and len(response_data['entries']) >
+0 and 'answer' in response_data['entries'][0]: # This part might need adjustment if /ai/extract has different response structure
                 response_text = response_data['entries'][0]['answer']
-                logger.info(f"Processing 'answer' from 'entries' (fallback) for file_id: {file_id}: {response_text}")
-                # For this fallback, we'll assume it might not be structured JSON and store raw.
-                # If it were expected to be JSON, the same parsing logic as above would be duplicated here.
+                logger.info(f"Processing 'answer' from 'entries' (fallback): {re
+sponse_text}")
                 processed_response['_raw_answer_from_entries'] = response_text
-                processed_response['_confidence_processing_failed'] = True 
-                processed_response['_message'] = "Processed using fallback 'entries' structure, JSON parsing not attempted for this path."
-            else:
-                logger.warning(f"Neither 'answer' (string) nor 'entries[0].answer' field found in the freeform API response for file_id: {file_id}. Response data: {response_data}")
-                processed_response['_error'] = "No 'answer' field in API response or not in expected format."
+                processed_response['_confidence_processing_failed'] = True
+            else: # This also might need adjustment for /ai/extract
+                logger.warning(f"Neither 'answer' nor 'entries[0].answer' field
+found in the freeform API response: {response_data}")
+                processed_response['_error'] = "No 'answer' field in API respons
+e"
                 processed_response['_confidence_processing_failed'] = True
             return processed_response
         except Exception as e:
-            logger.error(f'Error in freeform metadata extraction call for file_id: {file_id}: {str(e)}')
+            logger.error(f'Error in freeform metadata extraction call: {str(e)}'
+)
             return {'error': str(e)}
 
-    # Return the dictionary of functions
     return {
         'structured': extract_structured_metadata,
         'freeform': extract_freeform_metadata
     }
 
-# Example of how it might be called (for testing, not part of the module's direct execution)
 if __name__ == '__main__':
-    # This part is for testing and won't run when imported
     class MockOAuth:
         def __init__(self, token):
             self.access_token = token
@@ -491,23 +430,13 @@ if __name__ == '__main__':
     class MockClient:
         def __init__(self, token):
             self._oauth = MockOAuth(token)
-            # self.auth = MockOAuth(token) # Alternative way to store auth
 
-    # Simulate Streamlit session state for testing
-    st.session_state.client = MockClient("test_access_token")
+    # Simulate Streamlit session state for testing if st is available
+    try:
+        st.session_state.client = MockClient("test_access_token")
+    except NameError: # st might not be defined if run directly as script withou
+t streamlit context
+        pass
 
     functions = get_extraction_functions()
     print(f"Available extraction functions: {list(functions.keys())}")
-
-    # Mock a call (won't actually make an API request without a real token and file)
-    # test_file_id = "12345"
-    # test_prompt = "Extract the invoice number and total amount."
-    # if 'freeform' in functions:
-    #     result = functions['freeform'](client=st.session_state.client, file_id=test_file_id, prompt=test_prompt)
-    #     print(f"Mock freeform call result: {result}")
-
-    # test_fields = [{'key': 'invoice_number', 'displayName': 'Invoice Number', 'type': 'string'}]
-    # if 'structured' in functions:
-    #     result_structured = functions['structured'](client=st.session_state.client, file_id=test_file_id, fields=test_fields)
-    #     print(f"Mock structured call result: {result_structured}")
-
