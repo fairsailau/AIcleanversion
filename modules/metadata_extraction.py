@@ -206,8 +206,9 @@ def get_extraction_functions() -> Dict[str, Any]:
                             }
 
             elif 'answer' in response_data and isinstance(response_data['answer'], str):
-                logger.info("Processing 'answer' as string (potential freeform JSON).")
+                logger.info(f"Processing 'answer' as string (potential freeform JSON) for file_id: {file_id}.")
                 response_text = response_data['answer']
+                json_str = "" # Initialize to avoid reference before assignment in logger
                 try:
                     json_start = response_text.find('{')
                     json_end = response_text.rfind('}') + 1
@@ -226,7 +227,7 @@ def get_extraction_functions() -> Dict[str, Any]:
                                     if original_ai_confidence not in ['High', 'Medium', 'Low']:
                                         confidence_level = 'Medium'
                                         origin = "default_invalid_confidence"
-                                        logger.warning(f"Field {field_key}: AI returned invalid confidence '{original_ai_confidence}' in parsed JSON. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
+                                        logger.warning(f"Field {field_key} (file_id: {file_id}): AI returned invalid confidence '{original_ai_confidence}' in parsed JSON. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
                                     else:
                                         confidence_level = original_ai_confidence
                                         origin = "ai_provided"
@@ -234,12 +235,12 @@ def get_extraction_functions() -> Dict[str, Any]:
                                     extracted_value = field_data['value']
                                     confidence_level = 'Medium'
                                     origin = "default_no_confidence"
-                                    logger.warning(f"Field {field_key}: AI response missing 'confidence' in parsed JSON. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
+                                    logger.warning(f"Field {field_key} (file_id: {file_id}): AI response missing 'confidence' in parsed JSON. Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
                                 else: # Not a dict with 'value' or not the expected structure
                                     extracted_value = field_data
                                     confidence_level = 'Medium'
                                     origin = "default_parsing_fallback"
-                                    logger.warning(f"Field {field_key}: Unexpected structure in parsed JSON. Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
+                                    logger.warning(f"Field {field_key} (file_id: {file_id}): Unexpected structure in parsed JSON. Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw AI data for field: {field_data}")
                                 
                                 processed_response[field_key] = {
                                     'value': extracted_value,
@@ -247,19 +248,22 @@ def get_extraction_functions() -> Dict[str, Any]:
                                     'confidence_origin': origin
                                 }
                         else:
-                            logger.warning(f"Parsed JSON from 'answer' string is not a dictionary: {parsed_json}")
+                            logger.warning(f"Parsed JSON from 'answer' string for file_id: {file_id} is not a dictionary. Type: {type(parsed_json)}. Parsed content: {parsed_json}")
                             processed_response['_raw_response'] = response_text
+                            processed_response['_error_parsing_json'] = f"Parsed JSON is not a dict: {type(parsed_json)}"
                             processed_response['_confidence_processing_failed'] = True
                     else:
-                        logger.warning("No JSON object found in 'answer' string.")
+                        logger.warning(f"No JSON object found in 'answer' string for file_id: {file_id}. Raw answer: \"{response_text}\"")
                         processed_response['_raw_response'] = response_text
                         processed_response['_confidence_processing_failed'] = True
-                except Exception as e:
-                    logger.error(f'Error parsing JSON from answer string: {str(e)}')
+                except json.JSONDecodeError as e_json:
+                    logger.error(f'Error parsing JSON from answer string for file_id: {file_id}: {str(e_json)}. JSON string attempted: "{json_str}". Raw full answer: "{response_text}"')
                     processed_response['_raw_response'] = response_text
+                    processed_response['_error_parsing_json'] = str(e_json)
                     processed_response['_confidence_processing_failed'] = True
+                # IMPORTANT: The next 'elif' must be at the same indentation level as the parent 'if/elif' chain
             elif 'entries' in response_data and len(response_data['entries']) > 0:
-                logger.info("Processing response using fallback 'entries' format.")
+                logger.info(f"Processing response using fallback 'entries' format for file_id: {file_id}.")
                 entry = response_data['entries'][0]
                 if 'metadata' in entry:
                     metadata = entry['metadata']
@@ -278,7 +282,7 @@ def get_extraction_functions() -> Dict[str, Any]:
                                         if original_ai_confidence not in ['High', 'Medium', 'Low']:
                                             confidence_level = 'Medium'
                                             origin = "default_invalid_confidence"
-                                            logger.warning(f"Field {field_key}: AI returned invalid confidence '{original_ai_confidence}' in parsed JSON (from entries). Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}")
+                                            logger.warning(f"Field {field_key} (file_id: {file_id}): AI returned invalid confidence '{original_ai_confidence}' in parsed JSON (from entries). Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}")
                                         else:
                                             confidence_level = original_ai_confidence
                                             origin = "ai_provided"
@@ -286,22 +290,22 @@ def get_extraction_functions() -> Dict[str, Any]:
                                         extracted_value = parsed_value['value']
                                         confidence_level = 'Medium'
                                         origin = "default_no_confidence"
-                                        logger.warning(f"Field {field_key}: AI response missing 'confidence' in parsed JSON (from entries). Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}")
+                                        logger.warning(f"Field {field_key} (file_id: {file_id}): AI response missing 'confidence' in parsed JSON (from entries). Defaulting to '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}")
                                     else: # Parsed JSON but not the expected structure
                                         extracted_value = field_value 
                                         confidence_level = 'Medium'
                                         origin = "default_parsing_fallback"
-                                        logger.warning(f"Field {field_key}: Unexpected structure in parsed JSON (from entries). Defaulting to original value and confidence '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}, Original field value: {field_value}")
+                                        logger.warning(f"Field {field_key} (file_id: {file_id}): Unexpected structure in parsed JSON (from entries). Defaulting to original value and confidence '{confidence_level}'. Origin: '{origin}'. Raw parsed value: {parsed_value}, Original field value: {field_value}")
                                 except json.JSONDecodeError:
                                     extracted_value = field_value 
                                     confidence_level = 'Medium'
                                     origin = "default_parsing_fallback"
-                                    logger.warning(f"Field {field_key}: Failed to parse potential JSON value (from entries). Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw field value: '{field_value}'")
+                                    logger.warning(f"Field {field_key} (file_id: {file_id}): Failed to parse potential JSON value (from entries). Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw field value: '{field_value}'")
                             else:
                                 extracted_value = field_value 
                                 confidence_level = 'Medium'
                                 origin = "default_no_confidence" # If not JSON, AI didn't provide confidence structure
-                                logger.info(f"Field {field_key}: Value is not a JSON string (from entries). Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw field value: '{field_value}'")
+                                logger.info(f"Field {field_key} (file_id: {file_id}): Value is not a JSON string (from entries). Defaulting to value '{extracted_value}' and confidence '{confidence_level}'. Origin: '{origin}'. Raw field value: '{field_value}'")
                             
                             processed_response[field_key] = {
                                 'value': extracted_value,
@@ -309,23 +313,23 @@ def get_extraction_functions() -> Dict[str, Any]:
                                 'confidence_origin': origin
                             }
                         except Exception as e:
-                            logger.error(f"Error processing field {field_key} with value '{field_value}' (from entries): {str(e)}. Assigning Low confidence and default_error_processing origin.")
+                            logger.error(f"Error processing field {field_key} (file_id: {file_id}) with value '{field_value}' (from entries): {str(e)}. Assigning Low confidence and default_error_processing origin.")
                             processed_response[field_key] = {
                                 'value': field_value, # Store raw data on error
                                 'confidence': 'Low',
                                 'confidence_origin': "default_error_processing"
                             }
                 else:
-                    logger.warning(f"No 'metadata' field found in the structured API entry: {entry}")
+                    logger.warning(f"No 'metadata' field found in the structured API entry for file_id: {file_id}: {entry}")
                     processed_response['_error'] = "No 'metadata' field in API entry"
                     processed_response['_confidence_processing_failed'] = True
             else:
-                logger.warning(f"Neither 'answer' nor 'entries' field found in the structured API response: {response_data}")
+                logger.warning(f"Neither 'answer' nor 'entries' field found in the structured API response for file_id: {file_id}: {response_data}")
                 processed_response['_error'] = "Neither 'answer' nor 'entries' field in API response"
                 processed_response['_confidence_processing_failed'] = True
             return processed_response
         except Exception as e:
-            logger.error(f'Error in structured metadata extraction call: {str(e)}')
+            logger.error(f'Error in structured metadata extraction call for file_id {file_id}: {str(e)}')
             return {'error': str(e)}
 
     def extract_freeform_metadata(client: Any, file_id: str, prompt: str, ai_model: str = 'azure__openai__gpt_4o_mini') -> Dict[str, Any]:
