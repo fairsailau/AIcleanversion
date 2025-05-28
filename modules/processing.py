@@ -178,65 +178,58 @@ def get_fields_for_ai_from_template(scope, template_key):
             logger.error(f"Error fetching metadata schema {scope}/{template_key}: {e}")
             return None
     
-    # Process the schema to extract fields
-    logger.info(f"Processing schema for {scope}/{template_key}: {type(schema_details)}")
+    # Process the schema to extract fields (Issue 3)
+    logger.info(f"Processing schema for {scope}/{template_key}: Type: {type(schema_details)}")
+    ai_fields = [] 
+    
+    fields_list_to_iterate = []
     if isinstance(schema_details, dict):
-        # Log the schema structure to help debug the issue
-        logger.info(f"Schema keys: {schema_details.keys()}")
-        
-        # Check if 'fields' is in the schema or if we need to access it differently
-        fields_list = []
-        if 'fields' in schema_details:
-            fields_list = schema_details.get('fields', [])
-            logger.info(f"Found {len(fields_list)} fields in schema['fields']")
-        elif hasattr(schema_details, 'fields'):
-            # Try to access fields as an attribute
-            fields_list = schema_details.fields
-            logger.info(f"Found fields as an attribute with {len(fields_list)} items")
-        
-        # Format this as a clean list for the AI model
-        ai_fields = []
-        for field in fields_list:
-            if isinstance(field, dict):
-                field_key = field.get('key')
-                if not field_key:
-                    continue  # Skip fields without keys
-                    
-                # Only include essential fields for AI extraction
-                field_for_ai = {
-                    'key': field_key,
-                    'type': field.get('type', 'string'),
-                    'displayName': field.get('displayName', field_key)
-                }
-                
-                # Add description if available - helpful context for AI
-                if 'description' in field and field['description']:
-                    field_for_ai['description'] = field['description']
-                    
-                # If enum, include options
-                if 'options' in field and field['options']:
-                    field_for_ai['options'] = field['options']
-                ai_fields.append(field_for_ai)
-            elif hasattr(field, 'key') and getattr(field, 'key'):
-                # Handle if field is an object with attributes
-                field_key = getattr(field, 'key')
-                field_for_ai = {
-                    'key': field_key,
-                    'type': getattr(field, 'type', 'string'),
-                    'displayName': getattr(field, 'displayName', field_key)
-                }
-                
-                # Add description if available
-                if hasattr(field, 'description') and getattr(field, 'description'):
-                    field_for_ai['description'] = getattr(field, 'description')
-                    
-                # If enum, include options
-                if hasattr(field, 'options') and getattr(field, 'options'):
-                    field_for_ai['options'] = getattr(field, 'options')
-                ai_fields.append(field_for_ai)
-        
-        logger.info(f"Extracted {len(ai_fields)} AI fields from template schema")
-        if ai_fields:  # Only return if we have at least one field
+        fields_list_to_iterate = schema_details.get('fields', [])
+        logger.info(f"Schema is a dict. Found {len(fields_list_to_iterate)} potential fields in schema_details['fields'].")
+    elif hasattr(schema_details, 'fields'): # Handles Box SDK's MetadataTemplate object
+        fields_list_to_iterate = schema_details.fields
+        logger.info(f"Schema is an object. Found {len(fields_list_to_iterate)} potential fields in schema_details.fields.")
+    else:
+        logger.warning(f"Schema for {scope}/{template_key} is not a dict and has no 'fields' attribute. Schema content: {schema_details}")
+
+    for field_obj in fields_list_to_iterate:
+        field_for_ai = {}
+        if isinstance(field_obj, dict):
+            field_key = field_obj.get('key')
+            if not field_key:
+                logger.warning(f"Skipping a field (from dict) due to missing 'key': {field_obj}")
+                continue
+            field_for_ai['key'] = field_key
+            field_for_ai['type'] = field_obj.get('type', 'string') # Default type to string
+            field_for_ai['displayName'] = field_obj.get('displayName', field_key) # Default displayName to key
+            description = field_obj.get('description')
+            if description: field_for_ai['description'] = description
+            options = field_obj.get('options')
+            if options: field_for_ai['options'] = options
+        elif hasattr(field_obj, 'key'): # Handles Box SDK Field object or similar custom objects
+            field_key = getattr(field_obj, 'key', None)
+            if not field_key:
+                logger.warning(f"Skipping a field (from object) due to missing 'key' attribute: {field_obj}")
+                continue
+            field_for_ai['key'] = field_key
+            field_for_ai['type'] = getattr(field_obj, 'type', 'string')
+            field_for_ai['displayName'] = getattr(field_obj, 'displayName', field_key)
+            description = getattr(field_obj, 'description', None)
+            if description: field_for_ai['description'] = description
+            options = getattr(field_obj, 'options', None)
+            if options: field_for_ai['options'] = options
+        else:
+            logger.warning(f"Skipping a field due to unrecognized format. Type: {type(field_obj)}, Content: {field_obj}")
+            continue
+        ai_fields.append(field_for_ai)
+
+    if not ai_fields and fields_list_to_iterate:
+        logger.warning(f"Template {scope}/{template_key} had {len(fields_list_to_iterate)} items in fields_list, but no AI fields were extracted. Check field structure and logs.")
+    elif not fields_list_to_iterate:
+         logger.warning(f"Template {scope}/{template_key} had no fields in its definition (fields_list was empty).")
+
+    logger.info(f"Extracted {len(ai_fields)} AI fields from template schema {scope}/{template_key}: {json.dumps(ai_fields, indent=2)}")
+    return ai_fields # Return empty list if no fields, otherwise the extracted fields.
             return ai_fields
         else:
             logger.warning(f"No fields were extracted from the schema although schema contained {len(fields_list)} field definitions")
@@ -351,6 +344,7 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     metadata_template=metadata_template,
                     ai_model=ai_model
                 )
+                logger.info(f"File {file_name} ({file_id}): Raw extracted metadata with confidences: {json.dumps(extracted_metadata, indent=2)}")
                 
                 # Validate the extracted metadata
                 
@@ -374,103 +368,120 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                     template_id=template_id_for_validation
                 )
                 
-                confidence_output = st.session_state.confidence_adjuster.adjust_confidence(extracted_metadata, validation_output)
-                overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output)
+                logger.info(f"File {file_name} ({file_id}): Data before confidence adjustment: {json.dumps(extracted_metadata, indent=2)}")
+                logger.info(f"File {file_name} ({file_id}): Validation output for confidence adjustment: {json.dumps(validation_output, indent=2)}")
 
-                # --- Restructure results to match results_viewer.py expectations ---
-                # Get the validation rules for mandatory field checks
-                validation_rules = st.session_state.rule_loader.get_rules_for_category_template(
-                    doc_category=doc_category,
-                    template_id=template_id_for_validation
-                )
+                # --- Restructure extracted_metadata for ConfidenceAdjuster (Issue 1) ---
+                data_for_adjuster = {}
+                if isinstance(extracted_metadata, dict):
+                    for temp_field_key, temp_field_val in extracted_metadata.items():
+                        if not temp_field_key.endswith("_confidence"): # Process only primary data fields
+                            value_str = str(temp_field_val) # Ensure value is string
+                            confidence_key_for_field = f"{temp_field_key}_confidence"
+                            confidence_str = str(extracted_metadata.get(confidence_key_for_field, "Low"))
+                            if not confidence_str: confidence_str = "Low" # Handle empty string
+
+                            data_for_adjuster[temp_field_key] = {
+                                "value": value_str,
+                                "confidence": confidence_str 
+                            }
                 
-                extraction_output = extracted_metadata if isinstance(extracted_metadata, dict) else {}
+                logger.info(f"File {file_name} ({file_id}): Data structured for confidence adjuster: {json.dumps(data_for_adjuster, indent=2)}")
                 
-                # Process each field for UI display
+                confidence_output = st.session_state.confidence_adjuster.adjust_confidence(data_for_adjuster, validation_output)
+                logger.info(f"File {file_name} ({file_id}): Adjusted confidence output from adjuster: {json.dumps(confidence_output, indent=2)}")
+                overall_status_info = st.session_state.confidence_adjuster.get_overall_document_status(confidence_output, validation_output) 
+
+                # --- Populate fields_for_ui and then st.session_state.extraction_results (Issue 2) ---
+                extraction_output = extracted_metadata if isinstance(extracted_metadata, dict) else {} # Original flat AI response
                 fields_for_ui = {}
-                for field_key, field_data in extraction_output.items():
-                    if field_key.startswith('_'):
+
+                for field_key, raw_field_value in extraction_output.items():
+                    if field_key.startswith('_'): # Skip any internal/meta fields from AI response
                         continue
-                        
-                    # Get field value and confidence
-                    if isinstance(field_data, dict):
-                        value = field_data.get('value', '')
-                        confidence = field_data.get('confidence', 'Low')
+                    
+                    current_field_value_str = str(raw_field_value)
+
+                    # Determine AI-reported confidence string for this field_key
+                    ai_confidence_str = "Low" # Default
+                    if field_key.endswith("_confidence"):
+                        # This field *is* a confidence field (e.g., "invoiceNumber_confidence").
+                        # Its value *is* its AI confidence string.
+                        ai_confidence_str = current_field_value_str if current_field_value_str else "Low"
                     else:
-                        value = field_data
-                        confidence = 'Low'
+                        # This is a primary data field (e.g., "invoiceNumber").
+                        # Look for its associated _confidence field in the original extraction_output.
+                        associated_confidence_key = f"{field_key}_confidence"
+                        ai_confidence_str = str(extraction_output.get(associated_confidence_key, "Low"))
+                        if not ai_confidence_str: ai_confidence_str = "Low" # Handle empty string
+
+                    # Get validation details for the current field_key from validation_output
+                    validation_details = validation_output.get('field_validations', {}).get(field_key, {})
+                    validation_status_str = validation_details.get('status', 'skip')
+                    validation_messages_list = validation_details.get('messages', [])
                     
-                    # Get validation details
-                    field_validation = validation_output.get('field_validations', {}).get(field_key, {})
-                    validation_status = field_validation.get('status', 'skip')
-                    validation_messages = field_validation.get('messages', [])
-                    
-                    # Get adjusted confidence details
-                    adjusted_confidence = confidence_output.get(field_key, {})
+                    # Determine final adjusted confidence (qualitative and numeric) for UI
+                    adjusted_qualitative_str = "Low"
+                    adjusted_numeric_score = 0.0
+
+                    if field_key.endswith("_confidence"):
+                        # For _confidence fields, adjusted confidence mirrors AI confidence.
+                        adjusted_qualitative_str = ai_confidence_str
+                        if ai_confidence_str == "High": adjusted_numeric_score = 0.9
+                        elif ai_confidence_str == "Medium": adjusted_numeric_score = 0.5
+                        elif ai_confidence_str == "Low": adjusted_numeric_score = 0.1
+                        else:
+                            logger.warning(f"Unexpected AI confidence string for _confidence field {field_key}: '{ai_confidence_str}'. Defaulting adjusted to Low (0.1).")
+                            adjusted_qualitative_str = "Low" 
+                            adjusted_numeric_score = 0.1
+                    else:
+                        # For primary data fields, get adjusted confidence from confidence_output.
+                        primary_field_adj_details = confidence_output.get(field_key, {})
+                        adjusted_qualitative_str = primary_field_adj_details.get('confidence_qualitative', 'Low')
+                        adjusted_numeric_score = primary_field_adj_details.get('confidence', 0.0)
                     
                     fields_for_ui[field_key] = {
-                        'value': value,
-                        'ai_confidence': confidence,
-                        'ai_confidence_qualitative': confidence if isinstance(confidence, str) else st.session_state.confidence_adjuster._get_qualitative_confidence(float(confidence)),
-                        'validation_status': validation_status,
-                        'validation_messages': validation_messages,
-                        'adjusted_confidence': adjusted_confidence.get('confidence', 0.0),
-                        'adjusted_confidence_qualitative': adjusted_confidence.get('confidence_qualitative', 'Low')
+                        'value': current_field_value_str,
+                        'ai_confidence': ai_confidence_str,
+                        'validation_status': validation_status_str,
+                        'validation_messages': validation_messages_list,
+                        'adjusted_confidence': adjusted_numeric_score, # Numeric score
+                        'adjusted_confidence_qualitative': adjusted_qualitative_str # Qualitative string
                     }
                 
-                # Calculate document-level validation summary
-                mandatory_check = validation_output.get('mandatory_check', {})
-                mandatory_status = mandatory_check.get('status', 'Failed')
-                missing_fields = mandatory_check.get('missing_fields', [])
-                
-                # Calculate overall confidence
-                confidence_values = [
-                    float(field_data.get('adjusted_confidence', 0.0))
-                    for field_data in confidence_output.values()
-                    if isinstance(field_data, dict)
-                ]
-                
-                avg_confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
-                overall_confidence_qualitative = st.session_state.confidence_adjuster._get_qualitative_confidence(avg_confidence)
-                
-                document_summary_for_ui = {
-                    'status': validation_output.get('status', 'Failed'),
-                    'mandatory_status': mandatory_status,
-                    'missing_fields': missing_fields,
-                    'overall_confidence': avg_confidence,
-                    'overall_confidence_qualitative': overall_confidence_qualitative,
-                    'field_count': len(fields_for_ui)
-                }
+                # The 'overall_status_info' dictionary is already calculated.
+                logger.info(f"File {file_name} ({file_id}): Overall status info for document summary: {json.dumps(overall_status_info, indent=2)}")
 
-                # Store the results in session state with the structure expected by results_viewer.py
                 st.session_state.extraction_results[file_id] = {
                     "file_name": file_name,
                     "document_type": current_doc_type,
                     "template_id_used_for_extraction": template_id_for_validation,
                     "fields": {
-                        field_key: {
-                            "value": field_data.get('value', ''),
-                            "ai_confidence": field_data.get('ai_confidence', 'Low'),
-                            "adjusted_confidence": field_data.get('adjusted_confidence_qualitative', 'Low'),
-                            "field_validation_status": field_data.get('validation_status', 'skip').lower(),
-                            "validations": [
+                        f_key: {
+                            "value": f_data.get('value'),
+                            "ai_confidence": f_data.get('ai_confidence'), 
+                            "adjusted_confidence": f_data.get('adjusted_confidence_qualitative'), # Display qualitative
+                            "field_validation_status": f_data.get('validation_status', 'skip').lower(),
+                            "validations": [ 
                                 {
-                                    "rule_type": "field_validation",
-                                    "status": field_data.get('validation_status', 'skip'),
-                                    "message": ". ".join(field_data.get('validation_messages', [])),
-                                    "confidence_impact": field_data.get('adjusted_confidence', 0.0)
+                                    "rule_type": "field_validation", 
+                                    "status": f_data.get('validation_status', 'skip'),
+                                    "message": ". ".join(f_data.get('validation_messages', [])),
+                                    "confidence_impact": f_data.get('adjusted_confidence') # Store numeric here
                                 }
                             ]
                         }
-                        for field_key, field_data in fields_for_ui.items()
+                        for f_key, f_data in fields_for_ui.items() 
                     },
-                    "document_validation_summary": {
-                        "mandatory_fields_status": document_summary_for_ui.get('mandatory_status', 'fail').lower(),
-                        "missing_mandatory_fields": document_summary_for_ui.get('missing_fields', []),
-                        "cross_field_status": "pass",  # Default to pass if not using cross-field validation
-                        "overall_document_confidence_suggestion": document_summary_for_ui.get('overall_confidence_qualitative', 'Low')
+                    "document_validation_summary": { 
+                        "mandatory_fields_status": overall_status_info.get('mandatory_status', 'fail').lower(),
+                        "missing_mandatory_fields": overall_status_info.get('missing_fields', []),
+                        "cross_field_status": overall_status_info.get('cross_field_status', "pass").lower(), 
+                        "overall_document_confidence_suggestion": overall_status_info.get('overall_confidence_qualitative', 'Low')
                     },
-                    "raw_ai_response": extracted_metadata  # Store the raw response for reference
+                    "raw_ai_response": extracted_metadata, 
+                    "data_sent_to_adjuster": data_for_adjuster, 
+                    "confidence_adjuster_output": confidence_output 
                 }
                 
                 # Add to processing state results for progress tracking
