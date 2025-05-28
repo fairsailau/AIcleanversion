@@ -230,11 +230,10 @@ def get_fields_for_ai_from_template(scope, template_key):
 
     logger.info(f"Extracted {len(ai_fields)} AI fields from template schema {scope}/{template_key}: {json.dumps(ai_fields, indent=2)}")
     return ai_fields # Return empty list if no fields, otherwise the extracted fields.
-            return ai_fields
         else:
-            logger.warning(f"No fields were extracted from the schema although schema contained {len(fields_list)} field definitions")
+            logger.warning(f"No fields were extracted from the schema although schema contained {len(fields_list_to_iterate)} field definitions")
             # Return a non-empty array with placeholder if no fields were extracted but schema had fields
-            if fields_list:
+            if fields_list_to_iterate:
                 return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
             return []
     elif schema_details is None: # Explicitly handle None case (error fetching schema)
