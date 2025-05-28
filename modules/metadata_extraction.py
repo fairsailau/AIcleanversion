@@ -103,10 +103,10 @@ def get_extraction_functions() -> Dict[str, Any]:
                         if isinstance(field_item, dict) and 'key' in field_item and ('value' in field_item):
                             field_key = field_item['key']
                             extracted_value = field_item['value']
-                            confidence_level = field_item.get('confidence', 'Medium')
-                            if confidence_level not in ['High', 'Medium', 'Low']:
-                                logger.warning(f"Field {field_key}: Unexpected confidence value '{confidence_level}', defaulting to Medium.")
-                                confidence_level = 'Medium'
+                            confidence_level = field_item.get('confidence', 'Low') # Default to Low
+                            if not confidence_level or confidence_level not in ['High', 'Medium', 'Low']: # Check for None, empty, or invalid
+                                logger.warning(f"Field {field_key}: AI provided confidence '{confidence_level}' which is invalid or missing. Defaulting to Low.")
+                                confidence_level = 'Low'
                             processed_response[field_key] = extracted_value
                             processed_response[f'{field_key}_confidence'] = confidence_level
                         else:
@@ -115,26 +115,26 @@ def get_extraction_functions() -> Dict[str, Any]:
                     logger.info("Processing 'answer' as standard key-value dictionary.")
                     for field_key, field_data in answer_dict.items():
                         extracted_value = None
-                        confidence_level = 'Medium'
+                        confidence_level = 'Low' # Default to Low initially
                         try:
                             if isinstance(field_data, dict) and 'value' in field_data and ('confidence' in field_data):
                                 extracted_value = field_data['value']
                                 confidence_level = field_data['confidence']
-                                if confidence_level not in ['High', 'Medium', 'Low']:
-                                    logger.warning(f"Field {field_key}: Unexpected confidence value '{confidence_level}', defaulting to Medium.")
-                                    confidence_level = 'Medium'
+                                if not confidence_level or confidence_level not in ['High', 'Medium', 'Low']:
+                                    logger.warning(f"Field {field_key}: AI provided confidence '{confidence_level}' which is invalid. Defaulting to Low.")
+                                    confidence_level = 'Low'
                             elif field_data is None:
                                 logger.info(f'Field {field_key}: Received null value. Setting value to None and confidence to Low.')
                                 extracted_value = None
                                 confidence_level = 'Low'
                             elif isinstance(field_data, dict) and 'value' in field_data and (len(field_data) == 1):
-                                logger.warning(f"Field {field_key}: Found dict with only 'value' key: {field_data}. Extracting value directly.")
+                                logger.warning(f"Field {field_key}: AI response provided 'value' but no 'confidence'. Defaulting confidence to Low.")
                                 extracted_value = field_data['value']
-                                confidence_level = 'Medium' # Default confidence if not provided
+                                confidence_level = 'Low'
                             else:
-                                logger.warning(f'Field {field_key}: Unexpected data format: {field_data}. Using raw data as value and Medium confidence.')
+                                logger.warning(f"Field {field_key}: Unexpected data format for field data: {field_data}. Defaulting confidence to Low.")
                                 extracted_value = field_data
-                                confidence_level = 'Medium'
+                                confidence_level = 'Low'
                             processed_response[field_key] = extracted_value
                             processed_response[f'{field_key}_confidence'] = confidence_level
                         except Exception as e:
@@ -156,13 +156,15 @@ def get_extraction_functions() -> Dict[str, Any]:
                                 if isinstance(field_data, dict) and 'value' in field_data and ('confidence' in field_data):
                                     extracted_value = field_data['value']
                                     confidence_level = field_data['confidence']
-                                    if confidence_level not in ['High', 'Medium', 'Low']:
-                                        confidence_level = 'Medium'
+                                    if not confidence_level or confidence_level not in ['High', 'Medium', 'Low']:
+                                        logger.warning(f"Field {field_key}: AI provided confidence '{confidence_level}' from parsed string which is invalid. Defaulting to Low.")
+                                        confidence_level = 'Low'
                                     processed_response[field_key] = extracted_value
                                     processed_response[f'{field_key}_confidence'] = confidence_level
                                 else:
+                                    logger.warning(f"Field {field_key}: Parsed JSON from AI 'answer' string for this field did not contain 'value'/'confidence' dict: {field_data}. Defaulting confidence to Low.")
                                     processed_response[field_key] = field_data
-                                    processed_response[f'{field_key}_confidence'] = 'Medium'
+                                    processed_response[f'{field_key}_confidence'] = 'Low'
                         else:
                             logger.warning(f"Parsed JSON from 'answer' string is not a dictionary: {parsed_json}")
                             processed_response['_raw_response'] = response_text
@@ -182,7 +184,7 @@ def get_extraction_functions() -> Dict[str, Any]:
                     metadata = entry['metadata']
                     for field_key, field_value in metadata.items():
                         extracted_value = field_value
-                        confidence_level = 'Medium' # Default confidence
+                        confidence_level = 'Low' # Default confidence
                         try:
                             if isinstance(field_value, str) and field_value.strip().startswith('{') and field_value.strip().endswith('}'):
                                 try:
@@ -190,20 +192,18 @@ def get_extraction_functions() -> Dict[str, Any]:
                                     if isinstance(parsed_value, dict) and 'value' in parsed_value and ('confidence' in parsed_value):
                                         extracted_value = parsed_value['value']
                                         confidence_level = parsed_value['confidence']
-                                        if confidence_level not in ['High', 'Medium', 'Low']:
-                                            logger.warning(f"Field {field_key}: Unexpected confidence value '{confidence_level}', defaulting to Medium.")
-                                            confidence_level = 'Medium'
+                                        if not confidence_level or confidence_level not in ['High', 'Medium', 'Low']:
+                                            logger.warning(f"Field {field_key}: AI provided confidence '{confidence_level}' in 'entries' path which is invalid. Defaulting to Low.")
+                                            confidence_level = 'Low'
                                     else:
                                         logger.warning(f"Field {field_key}: Parsed JSON but keys 'value' and 'confidence' not found. Using raw value.")
-                                        # extracted_value remains field_value
-                                        # confidence_level remains 'Medium'
+                                        # confidence_level remains 'Low' (initial default)
                                 except json.JSONDecodeError:
                                     logger.warning(f"Field {field_key}: Failed to parse potential JSON value '{field_value}'. Using raw value.")
-                                    # extracted_value remains field_value
-                                    # confidence_level remains 'Medium'
+                                    # confidence_level remains 'Low' (initial default)
                             else:
-                                # Value is not a JSON string, use as is with Medium confidence
-                                logger.info(f'Field {field_key}: Value is not the expected JSON format. Using raw value and Medium confidence.')
+                                # Value is not a JSON string, use as is with Low confidence
+                                logger.info(f'Field {field_key}: Value is not the expected JSON format. Using raw value and Low confidence.')
                             processed_response[field_key] = extracted_value
                             processed_response[f'{field_key}_confidence'] = confidence_level
                         except Exception as e:
@@ -290,16 +290,16 @@ def get_extraction_functions() -> Dict[str, Any]:
                                 if isinstance(value_confidence_pair, dict) and 'value' in value_confidence_pair and 'confidence' in value_confidence_pair:
                                     extracted_val = value_confidence_pair['value']
                                     confidence_val = value_confidence_pair['confidence']
-                                    if confidence_val not in ['High', 'Medium', 'Low']:
-                                        logger.warning(f"Field {key}: Unexpected confidence '{confidence_val}', defaulting to Medium.")
-                                        confidence_val = 'Medium'
+                                    if not confidence_val or confidence_val not in ['High', 'Medium', 'Low']:
+                                        logger.warning(f"Field {key}: AI provided confidence '{confidence_val}' in freeform response which is invalid. Defaulting to Low.")
+                                        confidence_val = 'Low'
                                     processed_response[key] = extracted_val
                                     processed_response[f'{key}_confidence'] = confidence_val
                                 else:
                                     # If not in value/confidence format, take the value as is
-                                    logger.warning(f"Field {key}: Unexpected format {value_confidence_pair}. Using raw value and Medium confidence.")
+                                    logger.warning(f"Field {key}: Unexpected format for value/confidence pair in freeform response: {value_confidence_pair}. Defaulting confidence to Low.")
                                     processed_response[key] = value_confidence_pair
-                                    processed_response[f'{key}_confidence'] = 'Medium'
+                                    processed_response[f'{key}_confidence'] = 'Low'
                         else:
                             logger.warning(f"Parsed JSON from 'answer' string is not a dictionary: {parsed_json}. Storing raw answer.")
                             processed_response['_raw_answer'] = response_text
