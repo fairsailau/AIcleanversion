@@ -178,69 +178,68 @@ def get_fields_for_ai_from_template(scope, template_key):
             logger.error(f"Error fetching metadata schema {scope}/{template_key}: {e}")
             return None
     
-    # Process the schema to extract fields (Issue 3)
-    logger.info(f"Processing schema for {scope}/{template_key}: Type: {type(schema_details)}")
-    ai_fields = [] 
-    
-    fields_list_to_iterate = []
-    if isinstance(schema_details, dict):
-        fields_list_to_iterate = schema_details.get('fields', [])
-        logger.info(f"Schema is a dict. Found {len(fields_list_to_iterate)} potential fields in schema_details['fields'].")
-    elif hasattr(schema_details, 'fields'): # Handles Box SDK's MetadataTemplate object
-        fields_list_to_iterate = schema_details.fields
-        logger.info(f"Schema is an object. Found {len(fields_list_to_iterate)} potential fields in schema_details.fields.")
-    else:
-        logger.warning(f"Schema for {scope}/{template_key} is not a dict and has no 'fields' attribute. Schema content: {schema_details}")
-
-    for field_obj in fields_list_to_iterate:
-        field_for_ai = {}
-        if isinstance(field_obj, dict):
-            field_key = field_obj.get('key')
-            if not field_key:
-                logger.warning(f"Skipping a field (from dict) due to missing 'key': {field_obj}")
-                continue
-            field_for_ai['key'] = field_key
-            field_for_ai['type'] = field_obj.get('type', 'string') # Default type to string
-            field_for_ai['displayName'] = field_obj.get('displayName', field_key) # Default displayName to key
-            description = field_obj.get('description')
-            if description: field_for_ai['description'] = description
-            options = field_obj.get('options')
-            if options: field_for_ai['options'] = options
-        elif hasattr(field_obj, 'key'): # Handles Box SDK Field object or similar custom objects
-            field_key = getattr(field_obj, 'key', None)
-            if not field_key:
-                logger.warning(f"Skipping a field (from object) due to missing 'key' attribute: {field_obj}")
-                continue
-            field_for_ai['key'] = field_key
-            field_for_ai['type'] = getattr(field_obj, 'type', 'string')
-            field_for_ai['displayName'] = getattr(field_obj, 'displayName', field_key)
-            description = getattr(field_obj, 'description', None)
-            if description: field_for_ai['description'] = description
-            options = getattr(field_obj, 'options', None)
-            if options: field_for_ai['options'] = options
-        else:
-            logger.warning(f"Skipping a field due to unrecognized format. Type: {type(field_obj)}, Content: {field_obj}")
-            continue
-        ai_fields.append(field_for_ai)
-
-    if not ai_fields and fields_list_to_iterate:
-        logger.warning(f"Template {scope}/{template_key} had {len(fields_list_to_iterate)} items in fields_list, but no AI fields were extracted. Check field structure and logs.")
-    elif not fields_list_to_iterate:
-         logger.warning(f"Template {scope}/{template_key} had no fields in its definition (fields_list was empty).")
-
-    logger.info(f"Extracted {len(ai_fields)} AI fields from template schema {scope}/{template_key}: {json.dumps(ai_fields, indent=2)}")
-    return ai_fields # Return empty list if no fields, otherwise the extracted fields.
-        else:
-            logger.warning(f"No fields were extracted from the schema although schema contained {len(fields_list_to_iterate)} field definitions")
-            # Return a non-empty array with placeholder if no fields were extracted but schema had fields
-            if fields_list_to_iterate:
-                return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
-            return []
-    elif schema_details is None: # Explicitly handle None case (error fetching schema)
-        logger.error(f"Schema for {scope}/{template_key} could not be retrieved (returned None).")
+    # Process the schema to extract fields
+    if schema_details is None:
+        logger.error(f"Schema for {scope}/{template_key} is None (either from cache or post-fetch).")
         return None
-    else: # Handle empty schema or other unexpected formats
-        logger.warning(f"Schema for {scope}/{template_key} is empty or not in expected dict format: {schema_details}")
+
+    # Check if schema_details is a processable type (dict with 'fields' or object with 'fields')
+    is_dict_with_fields = isinstance(schema_details, dict) and 'fields' in schema_details
+    is_object_with_fields = hasattr(schema_details, 'fields') and not isinstance(schema_details, dict)
+
+    if is_dict_with_fields or is_object_with_fields:
+        logger.info(f"Processing schema for {scope}/{template_key}: Type: {type(schema_details)}")
+        ai_fields = [] 
+        fields_list_to_iterate = []
+
+        if is_dict_with_fields:
+            fields_list_to_iterate = schema_details.get('fields', [])
+            logger.info(f"Schema is a dict. Found {len(fields_list_to_iterate)} potential fields in schema_details['fields'].")
+        elif is_object_with_fields: 
+            fields_list_to_iterate = schema_details.fields
+            logger.info(f"Schema is an object. Found {len(fields_list_to_iterate)} potential fields in schema_details.fields.")
+            
+        for field_obj in fields_list_to_iterate:
+            field_for_ai = {}
+            if isinstance(field_obj, dict):
+                field_key = field_obj.get('key')
+                if not field_key:
+                    logger.warning(f"Skipping a field (from dict) due to missing 'key': {field_obj}")
+                    continue
+                field_for_ai['key'] = field_key
+                field_for_ai['type'] = field_obj.get('type', 'string') 
+                field_for_ai['displayName'] = field_obj.get('displayName', field_key) 
+                description = field_obj.get('description')
+                if description: field_for_ai['description'] = description
+                options = field_obj.get('options')
+                if options: field_for_ai['options'] = options
+            elif hasattr(field_obj, 'key'): 
+                field_key = getattr(field_obj, 'key', None)
+                if not field_key:
+                    logger.warning(f"Skipping a field (from object) due to missing 'key' attribute: {field_obj}")
+                    continue
+                field_for_ai['key'] = field_key
+                field_for_ai['type'] = getattr(field_obj, 'type', 'string')
+                field_for_ai['displayName'] = getattr(field_obj, 'displayName', field_key)
+                description = getattr(field_obj, 'description', None)
+                if description: field_for_ai['description'] = description
+                options = getattr(field_obj, 'options', None)
+                if options: field_for_ai['options'] = options
+            else:
+                logger.warning(f"Skipping a field due to unrecognized format. Type: {type(field_obj)}, Content: {field_obj}")
+                continue
+            ai_fields.append(field_for_ai)
+
+        if not ai_fields and fields_list_to_iterate: # Log if fields were present but none were suitable for AI
+            logger.warning(f"Template {scope}/{template_key} had {len(fields_list_to_iterate)} items in its fields list, but no AI-suitable fields were extracted. Check field structure and logs.")
+        elif not fields_list_to_iterate: # Log if the schema itself had no fields defined
+             logger.warning(f"Template {scope}/{template_key} had no fields in its definition (fields_list was empty).")
+
+        logger.info(f"Extracted {len(ai_fields)} AI fields from template schema {scope}/{template_key}: {json.dumps(ai_fields, indent=2)}")
+        return ai_fields
+    
+    else: # Handles cases where schema_details is not None, but not processable (e.g., empty dict, unexpected type)
+        logger.warning(f"Schema for {scope}/{template_key} is present but not in a processable format (e.g., empty dict, wrong type). Schema content: {schema_details}")
         # Return a placeholder field instead of empty list to prevent processing from stopping
         return [{'key': 'placeholder', 'type': 'string', 'displayName': 'Placeholder Field'}]
 
