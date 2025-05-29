@@ -505,10 +505,10 @@ def process_files_with_progress(files_to_process: List[Dict[str, Any]], extracti
                         for f_key, f_data in fields_for_ui.items() 
                     },
                     "document_validation_summary": { 
-                        "mandatory_fields_status": overall_status_info.get('mandatory_status', 'fail').lower(),
-                        "missing_mandatory_fields": overall_status_info.get('missing_fields', []),
+                        "mandatory_fields_status": validation_output.get('mandatory_check', {}).get('status', 'fail').lower(),
+                        "missing_mandatory_fields": validation_output.get('mandatory_check', {}).get('missing_fields', []),
                         "cross_field_status": overall_status_info.get('cross_field_status', "pass").lower(), 
-                        "overall_document_confidence_suggestion": overall_status_info.get('overall_confidence_qualitative', 'Low')
+                        "overall_document_confidence_suggestion": overall_status_info.get('status', 'Low')
                     },
                     "raw_ai_response": extracted_metadata, 
                     "data_sent_to_adjuster": data_for_adjuster, 
