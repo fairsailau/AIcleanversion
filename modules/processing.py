@@ -155,11 +155,26 @@ def get_fields_for_ai_from_template(scope, template_key):
             if hasattr(schema, 'fields') and not isinstance(schema, dict):
                 # Convert MetadataTemplate object to dictionary format expected by the rest of the code
                 temp_fields = []
-                for field in schema.fields:
+                for field in schema.fields: # field is an SDK Field object
                     field_dict = {}
-                    for attr in ['key', 'type', 'displayName', 'description', 'options']:
-                        if hasattr(field, attr):
-                            field_dict[attr] = getattr(field, attr)
+                    # Access the underlying _response_object dictionary of the Field object
+                    if hasattr(field, '_response_object') and isinstance(field._response_object, dict):
+                        field_data_dict = field._response_object
+                        for attr_string in ['key', 'type', 'displayName', 'description', 'options']:
+                            if attr_string in field_data_dict:
+                                field_dict[attr_string] = field_data_dict[attr_string]
+                            # Log if essential keys like 'key' or 'type' are missing from the _response_object
+                            elif attr_string == 'key' or attr_string == 'type':
+                                logger.warning(f"Attribute '{attr_string}' missing in field's _response_object for template '{template_key}'. Field data from _response_object: {field_data_dict}")
+                    else:
+                        # Log if the field object doesn't have the expected _response_object structure
+                        logger.warning(f"Field object of type '{type(field)}' does not have a valid _response_object dictionary. Template: '{template_key}'. Field details: {str(field)[:1000]}") # Log first 1000 chars of field string rep
+                    
+                    # Ensure that if a 'key' was not found, the field_dict is not added, or is handled appropriately
+                    # to prevent downstream errors. However, the current logic skips fields if 'key' is missing later.
+                    # For now, we will append field_dict as it is, and the downstream check for 'key' will handle empty/keyless dicts.
+                    # If field_dict remains empty (e.g. _response_object was invalid), or if 'key' is missing, 
+                    # the existing downstream logic will skip it with a log.
                     temp_fields.append(field_dict)
                 
                 schema_details = {
