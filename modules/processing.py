@@ -155,27 +155,34 @@ def get_fields_for_ai_from_template(scope, template_key):
             if hasattr(schema, 'fields') and not isinstance(schema, dict):
                 # Convert MetadataTemplate object to dictionary format expected by the rest of the code
                 temp_fields = []
-                for field in schema.fields: # field is an SDK Field object
-                    field_dict = {}
-                    # Access the underlying _response_object dictionary of the Field object
-                    if hasattr(field, '_response_object') and isinstance(field._response_object, dict):
-                        field_data_dict = field._response_object
-                        for attr_string in ['key', 'type', 'displayName', 'description', 'options']:
-                            if attr_string in field_data_dict:
-                                field_dict[attr_string] = field_data_dict[attr_string]
-                            # Log if essential keys like 'key' or 'type' are missing from the _response_object
-                            elif attr_string == 'key' or attr_string == 'type':
-                                logger.warning(f"Attribute '{attr_string}' missing in field's _response_object for template '{template_key}'. Field data from _response_object: {field_data_dict}")
-                    else:
-                        # Log if the field object doesn't have the expected _response_object structure
-                        logger.warning(f"Field object of type '{type(field)}' does not have a valid _response_object dictionary. Template: '{template_key}'. Field details: {str(field)[:1000]}") # Log first 1000 chars of field string rep
+                for field_item in schema.fields: # field_item is an item from schema.fields
+                    field_dict_to_add = {}
+                    attributes_to_copy = ['key', 'type', 'displayName', 'description', 'options']
+
+                    if isinstance(field_item, dict): # If the item from schema.fields is already a dictionary
+                        for attr_key in attributes_to_copy:
+                            if attr_key in field_item:
+                                field_dict_to_add[attr_key] = field_item[attr_key]
+                        if not field_dict_to_add.get('key'): # Check if key was actually copied
+                             logger.warning(f"Item from schema.fields was a dict but missing 'key': {str(field_item)[:500]}. Template: '{template_key}'.")
+                    elif hasattr(field_item, '_response_object') and isinstance(field_item._response_object, dict): # It's an SDK obj with _response_object
+                        source_dict = field_item._response_object
+                        for attr_key in attributes_to_copy:
+                            if attr_key in source_dict:
+                                field_dict_to_add[attr_key] = source_dict[attr_key]
+                        if not field_dict_to_add.get('key'):
+                             logger.warning(f"SDK object's _response_object missing 'key': {str(source_dict)[:500]}. Template: '{template_key}'.")
+                    # Fallback for SDK objects that might not use _response_object but have direct attributes
+                    elif not isinstance(field_item, dict): # Ensure it's not a dict before trying general hasattr/getattr
+                         for attr_key in attributes_to_copy:
+                            if hasattr(field_item, attr_key): # Check direct attribute
+                                field_dict_to_add[attr_key] = getattr(field_item, attr_key)
+                         if not field_dict_to_add.get('key'):
+                             logger.warning(f"SDK object did not yield a 'key' through direct attributes. Item type: {type(field_item)}. Template: '{template_key}'.")
+                    else: # Should not be reached if above logic is comprehensive for dict/SDK obj
+                        logger.warning(f"Unrecognized item type '{type(field_item)}' in schema.fields. Item: {str(field_item)[:1000]}. Template: '{template_key}'.")
                     
-                    # Ensure that if a 'key' was not found, the field_dict is not added, or is handled appropriately
-                    # to prevent downstream errors. However, the current logic skips fields if 'key' is missing later.
-                    # For now, we will append field_dict as it is, and the downstream check for 'key' will handle empty/keyless dicts.
-                    # If field_dict remains empty (e.g. _response_object was invalid), or if 'key' is missing, 
-                    # the existing downstream logic will skip it with a log.
-                    temp_fields.append(field_dict)
+                    temp_fields.append(field_dict_to_add)
                 
                 schema_details = {
                     'displayName': getattr(schema, 'displayName', template_key),
@@ -215,36 +222,47 @@ def get_fields_for_ai_from_template(scope, template_key):
             logger.info(f"Schema is an object. Found {len(fields_list_to_iterate)} potential fields in schema_details.fields.")
             
         for field_obj in fields_list_to_iterate:
-            field_for_ai = {}
+            # field_for_ai = {} # Removed unconditional initialization
+
             if isinstance(field_obj, dict):
-                field_key = field_obj.get('key')
-                if not field_key:
-                    logger.warning(f"Skipping a field (from dict) due to missing 'key': {field_obj}")
+                field_key = field_obj.get('key') 
+                if not field_key: 
+                    logger.warning(f"Skipping a field (from dict) due to missing 'key': {str(field_obj)[:500]}. Template: '{template_key}'.") 
                     continue
-                field_for_ai['key'] = field_key
-                field_for_ai['type'] = field_obj.get('type', 'string') 
-                field_for_ai['displayName'] = field_obj.get('displayName', field_key) 
-                description = field_obj.get('description')
-                if description: field_for_ai['description'] = description
-                options = field_obj.get('options')
-                if options: field_for_ai['options'] = options
-            elif hasattr(field_obj, 'key'): 
+                
+                field_for_ai = {'key': field_key} # Initialize here
+                
+                attributes_to_copy = ['type', 'displayName', 'description', 'options']
+                for attr_to_copy in attributes_to_copy:
+                    if attr_to_copy in field_obj:
+                        field_for_ai[attr_to_copy] = field_obj[attr_to_copy]
+                
+                if 'displayName' not in field_for_ai:
+                    field_for_ai['displayName'] = field_key
+                if 'type' not in field_for_ai:
+                    field_for_ai['type'] = 'string'
+                
+                ai_fields.append(field_for_ai) # Append here, inside the if block
+
+            elif hasattr(field_obj, 'key'): # Handles SDK objects or other objects with direct attributes
                 field_key = getattr(field_obj, 'key', None)
                 if not field_key:
-                    logger.warning(f"Skipping a field (from object) due to missing 'key' attribute: {field_obj}")
-                    continue
-                field_for_ai['key'] = field_key
-                field_for_ai['type'] = getattr(field_obj, 'type', 'string')
-                field_for_ai['displayName'] = getattr(field_obj, 'displayName', field_key)
-                description = getattr(field_obj, 'description', None)
-                if description: field_for_ai['description'] = description
-                options = getattr(field_obj, 'options', None)
-                if options: field_for_ai['options'] = options
-            else:
-                logger.warning(f"Skipping a field due to unrecognized format. Type: {type(field_obj)}, Content: {field_obj}")
-                continue
-            ai_fields.append(field_for_ai)
-
+                   logger.warning(f"Skipping SDK object field due to missing 'key': {str(field_obj)[:500]}. Template: '{template_key}'.")
+                   continue
+                field_for_ai = {'key': field_key}
+                attributes_to_copy = ['type', 'displayName', 'description', 'options']
+                for attr_to_copy in attributes_to_copy:
+                   if hasattr(field_obj, attr_to_copy):
+                       field_for_ai[attr_to_copy] = getattr(field_obj, attr_to_copy)
+                if 'displayName' not in field_for_ai:
+                   field_for_ai['displayName'] = field_key
+                if 'type' not in field_for_ai:
+                   field_for_ai['type'] = 'string'
+                ai_fields.append(field_for_ai)
+            else: 
+                logger.warning(f"Skipping field due to unrecognized format or it's not a dict/SDK object with a key. Type: {type(field_obj)}, Content: {str(field_obj)[:500]}. Template: '{template_key}'.")
+                # No append here, as field_for_ai was not successfully populated.
+                
         if not ai_fields and fields_list_to_iterate: # Log if fields were present but none were suitable for AI
             logger.warning(f"Template {scope}/{template_key} had {len(fields_list_to_iterate)} items in its fields list, but no AI-suitable fields were extracted. Check field structure and logs.")
         elif not fields_list_to_iterate: # Log if the schema itself had no fields defined
